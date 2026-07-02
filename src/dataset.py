@@ -1,8 +1,63 @@
 from pathlib import Path
+
 import tensorflow as tf
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+CLASS_NAMES = ["fresh", "rotten"]
+
+
+def get_label(folder_name):
+    folder_name = folder_name.lower()
+
+    if folder_name.startswith("fresh"):
+        return "fresh"
+    if folder_name.startswith("rotten"):
+        return "rotten"
+
+    raise ValueError(
+        f"Could not infer label from folder '{folder_name}'. "
+        "Folder names must start with 'fresh' or 'rotten'."
+    )
+
+
+def get_split_dir(data_dir, split_name):
+    for item in data_dir.iterdir():
+        if item.is_dir() and item.name.lower() == split_name.lower():
+            return item
+
+    raise ValueError(f"Could not find '{split_name}' folder inside {data_dir}.")
+
+
+def collect_images(split_dir):
+    image_paths = []
+    labels = []
+
+    for class_dir in sorted(split_dir.iterdir()):
+        if not class_dir.is_dir():
+            continue
+
+        label = get_label(class_dir.name)
+
+        for image_path in class_dir.rglob("*"):
+            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS:
+                image_paths.append(str(image_path))
+                labels.append(label)
+
+    return image_paths, labels
+
+
+def make_dataset(image_paths, labels, label_to_index, image_size):
+    numeric_labels = [label_to_index[label] for label in labels]
+    path_ds = tf.data.Dataset.from_tensor_slices((image_paths, numeric_labels))
+
+    def load_image(path, label):
+        image = tf.io.read_file(path)
+        image = tf.image.decode_image(image, channels=3, expand_animations=False)
+        image = tf.image.resize(image, image_size)
+        return image, label
+
+    return path_ds.map(load_image, num_parallel_calls=tf.data.AUTOTUNE)
 
 
 def load_data(
@@ -15,53 +70,32 @@ def load_data(
 ):
     data_dir = Path(data_dir)
 
-    image_paths = []
-    labels = []
+    train_dir = get_split_dir(data_dir, "Train")
+    test_dir = get_split_dir(data_dir, "Test")
 
-    for item_dir in sorted(data_dir.iterdir()):
-        if not item_dir.is_dir():
-            continue
+    train_paths, train_labels = collect_images(train_dir)
+    test_paths, test_labels = collect_images(test_dir)
 
-        for condition_dir in sorted(item_dir.iterdir()):
-            if not condition_dir.is_dir():
-                continue
+    if len(train_paths) == 0:
+        raise ValueError("No training images found. Check your dataset/Train folder.")
+    if len(test_paths) == 0:
+        raise ValueError("No test images found. Check your dataset/Test folder.")
 
-            label = condition_dir.name
-
-            for image_path in condition_dir.glob("*"):
-                if image_path.suffix.lower() in IMAGE_EXTENSIONS:
-                    image_paths.append(str(image_path))
-                    labels.append(label)
-
-    if len(image_paths) == 0:
-        raise ValueError("No images found. Check your dataset folder path.")
-
-    class_names = sorted(set(labels))
+    class_names = CLASS_NAMES
     label_to_index = {name: index for index, name in enumerate(class_names)}
-    numeric_labels = [label_to_index[label] for label in labels]
 
-    path_ds = tf.data.Dataset.from_tensor_slices((image_paths, numeric_labels))
-
-    def load_image(path, label):
-        image = tf.io.read_file(path)
-        image = tf.image.decode_image(image, channels=3, expand_animations=False)
-        image = tf.image.resize(image, image_size)
-        return image, label
-
-    dataset = path_ds.map(load_image, num_parallel_calls=tf.data.AUTOTUNE)
-    dataset = dataset.shuffle(
-        buffer_size=len(image_paths),
+    train_dataset = make_dataset(train_paths, train_labels, label_to_index, image_size)
+    train_dataset = train_dataset.shuffle(
+        buffer_size=len(train_paths),
         seed=seed,
         reshuffle_each_iteration=False,
     )
+    test_set = make_dataset(test_paths, test_labels, label_to_index, image_size)
 
-    total_size = len(image_paths)
-    test_size = int(total_size * test_split)
-    val_size = int(total_size * validation_split)
+    val_size = int(len(train_paths) * validation_split)
 
-    test_set = dataset.take(test_size)
-    val_set = dataset.skip(test_size).take(val_size)
-    train_set = dataset.skip(test_size + val_size)
+    val_set = train_dataset.take(val_size)
+    train_set = train_dataset.skip(val_size)
 
     train_set = train_set.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     val_set = val_set.batch(batch_size).prefetch(tf.data.AUTOTUNE)

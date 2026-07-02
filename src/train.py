@@ -36,7 +36,7 @@ def test_model(model, test_set):
 
 
 def main():
-    data_dir = "Unified_Dataset"
+    data_dir = "dataset"
 
     train_set, val_set, test_set, class_names = load_data(
         data_dir=data_dir,
