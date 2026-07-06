@@ -3,6 +3,8 @@ import json
 from collections import Counter, OrderedDict
 from pathlib import Path
 
+import tensorflow as tf
+
 
 SPLITS = ("train", "valid", "test")
 
@@ -55,8 +57,8 @@ def fruit_from_class_name(class_name):
 
 def image_path_for(split_dir, filename):
     candidates = [
-        split_dir / "images" / filename,
         split_dir / filename,
+        split_dir / "images" / filename,
     ]
 
     for candidate in candidates:
@@ -188,11 +190,158 @@ def write_detection_metadata(dataset, output_dir):
     return summary
 
 
-def prepare_detection_dataset(data_dir, output_dir=None):
+def write_label_map_pbtxt(class_names, output_path):
+    lines = []
+
+    for index, class_name in enumerate(class_names, start=1):
+        escaped_name = class_name.replace("'", "\\'")
+        lines.extend(
+            [
+                "item {",
+                f"  id: {index}",
+                f"  name: '{escaped_name}'",
+                "}",
+                "",
+            ]
+        )
+
+    output_path = Path(output_path)
+    output_path.write_text("\n".join(lines))
+    return output_path
+
+
+def bytes_feature(value):
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
+def float_list_feature(values):
+    return tf.train.Feature(float_list=tf.train.FloatList(value=values))
+
+
+def int64_feature(value):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+
+def int64_list_feature(values):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
+
+
+def bytes_list_feature(values):
+    encoded_values = [
+        value.encode("utf-8") if isinstance(value, str) else value for value in values
+    ]
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=encoded_values))
+
+
+def grouped_records(records):
+    grouped = OrderedDict()
+
+    for record in records:
+        grouped.setdefault(record["image_path"], []).append(record)
+
+    return grouped
+
+
+def tf_example_for_image(image_records, class_to_id):
+    first_record = image_records[0]
+    width = first_record["width"]
+    height = first_record["height"]
+    filename = first_record["filename"]
+    image_path = Path(first_record["image_path"])
+    encoded_image = image_path.read_bytes()
+    image_format = image_path.suffix.lower().lstrip(".").encode("utf-8")
+
+    xmins = []
+    xmaxs = []
+    ymins = []
+    ymaxs = []
+    class_texts = []
+    class_ids = []
+
+    for record in image_records:
+        bbox = record["bbox"]
+        xmins.append(max(0.0, min(1.0, bbox["xmin"] / width)))
+        xmaxs.append(max(0.0, min(1.0, bbox["xmax"] / width)))
+        ymins.append(max(0.0, min(1.0, bbox["ymin"] / height)))
+        ymaxs.append(max(0.0, min(1.0, bbox["ymax"] / height)))
+        class_texts.append(record["class_name"])
+        class_ids.append(class_to_id[record["class_name"]])
+
+    features = {
+        "image/height": int64_feature(height),
+        "image/width": int64_feature(width),
+        "image/filename": bytes_feature(filename),
+        "image/source_id": bytes_feature(filename),
+        "image/encoded": bytes_feature(encoded_image),
+        "image/format": bytes_feature(image_format),
+        "image/object/bbox/xmin": float_list_feature(xmins),
+        "image/object/bbox/xmax": float_list_feature(xmaxs),
+        "image/object/bbox/ymin": float_list_feature(ymins),
+        "image/object/bbox/ymax": float_list_feature(ymaxs),
+        "image/object/class/text": bytes_list_feature(class_texts),
+        "image/object/class/label": int64_list_feature(class_ids),
+    }
+
+    return tf.train.Example(features=tf.train.Features(feature=features))
+
+
+def write_tfrecord(records, class_to_id, output_path):
+    output_path = Path(output_path)
+    grouped = grouped_records(records)
+
+    with tf.io.TFRecordWriter(str(output_path)) as writer:
+        for image_records in grouped.values():
+            writer.write(tf_example_for_image(image_records, class_to_id).SerializeToString())
+
+    return output_path
+
+
+def write_tensorflow_object_detection_files(dataset, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    class_to_id = {
+        class_name: index for index, class_name in enumerate(dataset["class_names"], start=1)
+    }
+    label_map_path = write_label_map_pbtxt(
+        dataset["class_names"],
+        output_dir / "label_map.pbtxt",
+    )
+    tfrecord_paths = {}
+
+    for split_name, records in dataset["splits"].items():
+        tfrecord_paths[split_name] = write_tfrecord(
+            records,
+            class_to_id,
+            output_dir / f"{split_name}.record",
+        )
+
+    return label_map_path, tfrecord_paths
+
+
+def prepare_detection_dataset(
+    data_dir,
+    output_dir=None,
+    export_tensorflow_records=False,
+):
     dataset = collect_detection_dataset(data_dir)
 
     if output_dir is not None:
         summary = write_detection_metadata(dataset, output_dir)
+        if export_tensorflow_records:
+            label_map_path, tfrecord_paths = write_tensorflow_object_detection_files(
+                dataset,
+                output_dir,
+            )
+            summary["tensorflow_object_detection"] = {
+                "label_map": str(label_map_path),
+                "tfrecords": {
+                    split_name: str(path)
+                    for split_name, path in tfrecord_paths.items()
+                },
+            }
     else:
         summary = summarize_detection_dataset(dataset)
 

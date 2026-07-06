@@ -7,7 +7,9 @@ import cv2
 from model import load_model
 
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "object_detector_model")
+MODEL_PATH = os.environ.get("MODEL_PATH", "exported-model/saved_model")
+MODEL_TYPE = os.environ.get("MODEL_TYPE", "tensorflow_saved_model")
+CLASS_NAMES_PATH = os.environ.get("CLASS_NAMES_PATH", "artifacts/class_names.txt")
 CAMERA_INDEX = int(os.environ.get("CAMERA_INDEX", "0"))
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
 FRAME_DELAY_SECONDS = float(os.environ.get("FRAME_DELAY_SECONDS", "0.2"))
@@ -20,7 +22,11 @@ def get_model():
     global model
 
     if model is None:
-        model = load_model(MODEL_PATH)
+        model = load_model(
+            MODEL_PATH,
+            model_type=MODEL_TYPE,
+            class_names_path=CLASS_NAMES_PATH,
+        )
 
     return model
 
