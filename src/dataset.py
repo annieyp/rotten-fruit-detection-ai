@@ -18,7 +18,7 @@ def get_split_dir(data_dir, split_name):
 
 
 def get_annotations_csv(split_dir):
-    for name in ("_annotations.csv", "annotations.csv"):
+    for name in ("annotations.csv", "_annotations.csv"):
         csv_path = split_dir / name
         if csv_path.exists():
             return csv_path
