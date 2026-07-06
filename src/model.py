@@ -1,100 +1,76 @@
+import re
+import tarfile
+import urllib.request
 from pathlib import Path
 
-import cv2
-import numpy as np
 import tensorflow as tf
 
 
-class DetectionModelNotConfiguredError(NotImplementedError):
-    pass
+PRETRAINED_MODEL_NAME = "efficientdet_d5_coco17_tpu-32"
+PRETRAINED_MODEL_URL = (
+    "http://download.tensorflow.org/models/object_detection/tf2/20200711/"
+    "efficientdet_d5_coco17_tpu-32.tar.gz"
+)
 
 
-class TensorFlowSavedModelDetector:
-    def __init__(self, model_path, class_names=None):
-        self.model_path = Path(model_path)
-        self.model = tf.saved_model.load(str(self.model_path))
-        self.detect_fn = self.model.signatures["serving_default"]
-        self.class_names = class_names or []
+def download_pretrained_model(pretrained_models_dir="pretrained_models"):
+    pretrained_models_dir = Path(pretrained_models_dir)
+    pretrained_models_dir.mkdir(parents=True, exist_ok=True)
+    model_dir = pretrained_models_dir / PRETRAINED_MODEL_NAME
 
-    def class_name_for(self, class_id):
-        class_index = int(class_id) - 1
+    if not model_dir.exists():
+        archive_path = pretrained_models_dir / f"{PRETRAINED_MODEL_NAME}.tar.gz"
+        urllib.request.urlretrieve(PRETRAINED_MODEL_URL, archive_path)
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(pretrained_models_dir)
 
-        if 0 <= class_index < len(self.class_names):
-            return self.class_names[class_index]
-
-        return f"class_{int(class_id)}"
-
-    def predict(self, image, confidence=0.25):
-        if isinstance(image, (str, Path)):
-            image = cv2.imread(str(image))
-            if image is None:
-                raise ValueError(f"Could not read image: {image}")
-
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        input_tensor = tf.convert_to_tensor(rgb_image, dtype=tf.uint8)[tf.newaxis, ...]
-        outputs = self.detect_fn(input_tensor)
-
-        boxes = outputs["detection_boxes"][0].numpy()
-        scores = outputs["detection_scores"][0].numpy()
-        classes = outputs["detection_classes"][0].numpy().astype(np.int64)
-        height, width = rgb_image.shape[:2]
-
-        detections = []
-
-        for box, score, class_id in zip(boxes, scores, classes):
-            if float(score) < confidence:
-                continue
-
-            ymin, xmin, ymax, xmax = box
-            class_name = self.class_name_for(class_id)
-
-            detections.append(
-                {
-                    "class": class_name,
-                    "class_id": int(class_id),
-                    "confidence": float(score),
-                    "box": {
-                        "xmin": float(xmin * width),
-                        "ymin": float(ymin * height),
-                        "xmax": float(xmax * width),
-                        "ymax": float(ymax * height),
-                    },
-                }
-            )
-
-        return detections
+    return model_dir
 
 
-def read_class_names(class_names_path):
-    if class_names_path is None:
-        return []
-
-    return [
-        line.strip()
-        for line in Path(class_names_path).read_text().splitlines()
-        if line.strip()
-    ]
-
-
-def build_model(*args, **kwargs):
-    raise DetectionModelNotConfiguredError(
-        "No object detection model has been selected yet. "
-        "Choose a detector/framework first, then implement build_model for it."
-    )
-
-
-def load_model(
-    model_path,
-    model_type="tensorflow_saved_model",
-    class_names_path=None,
-    class_names=None,
+def build_model(
+    num_classes,
+    record_paths,
+    output_dir="artifacts",
+    batch_size=2,
+    num_steps=5000,
+    pretrained_models_dir="pretrained_models",
 ):
-    if model_type == "tensorflow_saved_model":
-        return TensorFlowSavedModelDetector(
-            model_path=model_path,
-            class_names=class_names or read_class_names(class_names_path),
-        )
+    """Download EfficientDet D5 and write a pipeline.config fine-tuned for our classes."""
+    output_dir = Path(output_dir)
+    pretrained_dir = download_pretrained_model(pretrained_models_dir)
 
-    raise DetectionModelNotConfiguredError(
-        f"Unsupported model_type '{model_type}'. Add an adapter in src/model.py."
+    label_map_path = output_dir / "label_map.pbtxt"
+    fine_tune_checkpoint = pretrained_dir / "checkpoint" / "ckpt-0"
+    eval_record = record_paths.get("valid", record_paths.get("test"))
+
+    config = (pretrained_dir / "pipeline.config").read_text()
+    config = re.sub(r"num_classes: \d+", f"num_classes: {num_classes}", config, count=1)
+    config = re.sub(r"batch_size: \d+", f"batch_size: {batch_size}", config, count=1)
+    config = re.sub(r"num_steps: \d+", f"num_steps: {num_steps}", config, count=1)
+    config = re.sub(
+        r'fine_tune_checkpoint: ".*?"',
+        f'fine_tune_checkpoint: "{fine_tune_checkpoint}"',
+        config,
     )
+    config = re.sub(
+        r'fine_tune_checkpoint_type: ".*?"',
+        'fine_tune_checkpoint_type: "detection"',
+        config,
+    )
+    config = re.sub(r'label_map_path: ".*?"', f'label_map_path: "{label_map_path}"', config)
+
+    input_paths = [str(record_paths["train"]), str(eval_record)]
+    config = re.sub(
+        r'input_path: ".*?"',
+        lambda match: f'input_path: "{input_paths.pop(0)}"' if input_paths else match.group(0),
+        config,
+    )
+
+    pipeline_config_path = output_dir / "ssd_efficientdet_d5_pipeline.config"
+    pipeline_config_path.write_text(config)
+    return pipeline_config_path
+
+
+def load_model(export_dir):
+    saved_model = tf.saved_model.load(str(Path(export_dir) / "saved_model"))
+    return saved_model.signatures["serving_default"]
