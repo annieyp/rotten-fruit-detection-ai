@@ -3,8 +3,6 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-import tensorflow as tf
-
 
 PRETRAINED_MODEL_NAME = "efficientdet_d5_coco17_tpu-32"
 PRETRAINED_MODEL_URL = (
@@ -13,7 +11,12 @@ PRETRAINED_MODEL_URL = (
 )
 
 
-def download_pretrained_model(pretrained_models_dir="pretrained_models"):
+def read_label_map_names(label_map_path):
+    text = Path(label_map_path).read_text()
+    return re.findall(r"name:\s*'([^']*)'", text)
+
+
+def download_pretrained_model(pretrained_models_dir="pre-trained-models"):
     pretrained_models_dir = Path(pretrained_models_dir)
     pretrained_models_dir.mkdir(parents=True, exist_ok=True)
     model_dir = pretrained_models_dir / PRETRAINED_MODEL_NAME
@@ -28,20 +31,21 @@ def download_pretrained_model(pretrained_models_dir="pretrained_models"):
 
 
 def build_model(
-    num_classes,
-    record_paths,
-    output_dir="artifacts",
+    label_map_path="annotations/label_map.pbtxt",
+    train_record_path="annotations/train.record",
+    eval_record_path="annotations/test.record",
+    model_dir="models/efficientdet_d5",
+    pretrained_models_dir="pre-trained-models",
     batch_size=2,
-    num_steps=5000,
-    pretrained_models_dir="pretrained_models",
+    num_steps=25000,
 ):
-    """Download EfficientDet D5 and write a pipeline.config fine-tuned for our classes."""
-    output_dir = Path(output_dir)
-    pretrained_dir = download_pretrained_model(pretrained_models_dir)
+    """Download EfficientDet D5 and write models/efficientdet_d5/pipeline.config."""
+    model_dir = Path(model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
-    label_map_path = output_dir / "label_map.pbtxt"
+    pretrained_dir = download_pretrained_model(pretrained_models_dir)
     fine_tune_checkpoint = pretrained_dir / "checkpoint" / "ckpt-0"
-    eval_record = record_paths.get("valid", record_paths.get("test"))
+    num_classes = len(read_label_map_names(label_map_path))
 
     config = (pretrained_dir / "pipeline.config").read_text()
     config = re.sub(r"num_classes: \d+", f"num_classes: {num_classes}", config, count=1)
@@ -57,20 +61,18 @@ def build_model(
         'fine_tune_checkpoint_type: "detection"',
         config,
     )
+    config = re.sub(r"use_bfloat16: (?:true|false)", "use_bfloat16: false", config)
     config = re.sub(r'label_map_path: ".*?"', f'label_map_path: "{label_map_path}"', config)
 
-    input_paths = [str(record_paths["train"]), str(eval_record)]
+    # First input_path is train_input_reader, second is eval_input_reader.
+    input_paths = [str(train_record_path), str(eval_record_path)]
     config = re.sub(
         r'input_path: ".*?"',
         lambda match: f'input_path: "{input_paths.pop(0)}"' if input_paths else match.group(0),
         config,
     )
 
-    pipeline_config_path = output_dir / "ssd_efficientdet_d5_pipeline.config"
+    pipeline_config_path = model_dir / "pipeline.config"
     pipeline_config_path.write_text(config)
+    print("Wrote pipeline config:", pipeline_config_path, f"(num_classes={num_classes})")
     return pipeline_config_path
-
-
-def load_model(export_dir):
-    saved_model = tf.saved_model.load(str(Path(export_dir) / "saved_model"))
-    return saved_model.signatures["serving_default"]

@@ -7,7 +7,8 @@ from dataset import load_data
 from model import build_model
 
 
-TF_MODELS_DIR = Path("tensorflow_models")
+# Cloned tensorflow/models repo (the Object Detection API lives in research/).
+API_REPO_DIR = Path("tensorflow_models")
 
 
 def run(command, cwd=None):
@@ -16,11 +17,11 @@ def run(command, cwd=None):
 
 def object_detection_dir():
     """Clone tensorflow/models and install the Object Detection API if needed."""
-    research_dir = TF_MODELS_DIR / "research"
+    research_dir = API_REPO_DIR / "research"
 
-    if not TF_MODELS_DIR.exists():
+    if not API_REPO_DIR.exists():
         run(["git", "clone", "--depth", "1",
-             "https://github.com/tensorflow/models.git", str(TF_MODELS_DIR)])
+             "https://github.com/tensorflow/models.git", str(API_REPO_DIR)])
         protos = [str(p.relative_to(research_dir))
                   for p in (research_dir / "object_detection" / "protos").glob("*.proto")]
         run(["protoc", *protos, "--python_out=."], cwd=research_dir)
@@ -33,36 +34,28 @@ def object_detection_dir():
     return research_dir
 
 
-def train(pipeline_config_path, model_dir, num_steps=5000):
+def train(pipeline_config_path, model_dir):
     research_dir = object_detection_dir()
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-
     run([
         sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
-        f"--pipeline_config_path={pipeline_config_path}",
         f"--model_dir={model_dir}",
-        f"--num_train_steps={num_steps}",
-        "--alsologtostderr",
+        f"--pipeline_config_path={pipeline_config_path}",
     ])
 
 
 def test_model(pipeline_config_path, model_dir):
     research_dir = object_detection_dir()
-
     run([
         sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
-        f"--pipeline_config_path={pipeline_config_path}",
         f"--model_dir={model_dir}",
+        f"--pipeline_config_path={pipeline_config_path}",
         f"--checkpoint_dir={model_dir}",
-        "--eval_timeout=1",
-        "--alsologtostderr",
     ])
 
 
 def export_model(pipeline_config_path, model_dir, export_dir):
     research_dir = object_detection_dir()
     Path(export_dir).mkdir(parents=True, exist_ok=True)
-
     run([
         sys.executable, str(research_dir / "object_detection" / "exporter_main_v2.py"),
         "--input_type=image_tensor",
@@ -74,28 +67,31 @@ def export_model(pipeline_config_path, model_dir, export_dir):
 
 def main(
     data_dir="dataset",
-    output_dir="artifacts",
-    model_dir="training/ssd_efficientdet_d5",
-    export_dir="artifacts/ssd_efficientdet_d5_saved_model",
-    num_steps=5000,
+    annotations_dir="annotations",
+    model_dir="models/efficientdet_d5",
+    export_dir="exported-models/efficientdet_d5",
     batch_size=2,
+    num_steps=25000,
 ):
-    record_paths, class_names = load_data(data_dir, output_dir)
-    print("Classes:", class_names)
+    # Step 1: build label_map.pbtxt + TFRecords from the raw dataset/ CSV exports.
+    record_paths, label_map_path, class_names = load_data(data_dir, annotations_dir)
+    eval_record_path = record_paths.get("valid", record_paths.get("test"))
 
+    # Step 2: download EfficientDet D5 and configure the pipeline for our classes.
     pipeline_config_path = build_model(
-        num_classes=len(class_names),
-        record_paths=record_paths,
-        output_dir=output_dir,
+        label_map_path=label_map_path,
+        train_record_path=record_paths["train"],
+        eval_record_path=eval_record_path,
+        model_dir=model_dir,
         batch_size=batch_size,
         num_steps=num_steps,
     )
 
-    train(pipeline_config_path, model_dir, num_steps=num_steps)
+    train(pipeline_config_path, model_dir)
     test_model(pipeline_config_path, model_dir)
     export_model(pipeline_config_path, model_dir, export_dir)
 
-    print("Saved model:", export_dir)
+    print("Exported model:", export_dir)
 
 
 if __name__ == "__main__":
