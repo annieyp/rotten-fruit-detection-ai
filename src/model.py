@@ -4,11 +4,16 @@ import urllib.request
 from pathlib import Path
 
 
-PRETRAINED_MODEL_NAME = "efficientdet_d5_coco17_tpu-32"
-PRETRAINED_MODEL_URL = (
-    "http://download.tensorflow.org/models/object_detection/tf2/20200711/"
-    "efficientdet_d5_coco17_tpu-32.tar.gz"
-)
+ZOO_BASE_URL = "http://download.tensorflow.org/models/object_detection/tf2/20200711/"
+
+# EfficientDet variants from the TF2 Detection Model Zoo. D1 is the cost/accuracy
+# sweet spot; D0 is cheapest, D5 is most accurate but slow/expensive.
+MODELS = {
+    "efficientdet_d0": "efficientdet_d0_coco17_tpu-32",
+    "efficientdet_d1": "efficientdet_d1_coco17_tpu-32",
+    "efficientdet_d5": "efficientdet_d5_coco17_tpu-32",
+}
+DEFAULT_MODEL = "efficientdet_d1"
 
 
 def read_label_map_names(label_map_path):
@@ -16,14 +21,15 @@ def read_label_map_names(label_map_path):
     return re.findall(r"name:\s*'([^']*)'", text)
 
 
-def download_pretrained_model(pretrained_models_dir="pre-trained-models"):
+def download_pretrained_model(model_name=DEFAULT_MODEL, pretrained_models_dir="pre-trained-models"):
+    zoo_name = MODELS[model_name]
     pretrained_models_dir = Path(pretrained_models_dir)
     pretrained_models_dir.mkdir(parents=True, exist_ok=True)
-    model_dir = pretrained_models_dir / PRETRAINED_MODEL_NAME
+    model_dir = pretrained_models_dir / zoo_name
 
     if not model_dir.exists():
-        archive_path = pretrained_models_dir / f"{PRETRAINED_MODEL_NAME}.tar.gz"
-        urllib.request.urlretrieve(PRETRAINED_MODEL_URL, archive_path)
+        archive_path = pretrained_models_dir / f"{zoo_name}.tar.gz"
+        urllib.request.urlretrieve(ZOO_BASE_URL + f"{zoo_name}.tar.gz", archive_path)
         with tarfile.open(archive_path) as archive:
             archive.extractall(pretrained_models_dir)
 
@@ -34,16 +40,17 @@ def build_model(
     label_map_path="annotations/label_map.pbtxt",
     train_record_path="annotations/train.record",
     eval_record_path="annotations/test.record",
-    model_dir="models/efficientdet_d5",
+    model_dir="models/efficientdet_d1",
+    model_name=DEFAULT_MODEL,
     pretrained_models_dir="pre-trained-models",
-    batch_size=2,
-    num_steps=25000,
+    batch_size=8,
+    num_steps=4000,
 ):
-    """Download EfficientDet D5 and write models/efficientdet_d5/pipeline.config."""
+    """Download the chosen EfficientDet variant and write model_dir/pipeline.config."""
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    pretrained_dir = download_pretrained_model(pretrained_models_dir)
+    pretrained_dir = download_pretrained_model(model_name, pretrained_models_dir)
     fine_tune_checkpoint = pretrained_dir / "checkpoint" / "ckpt-0"
     num_classes = len(read_label_map_names(label_map_path))
 
@@ -74,5 +81,8 @@ def build_model(
 
     pipeline_config_path = model_dir / "pipeline.config"
     pipeline_config_path.write_text(config)
-    print("Wrote pipeline config:", pipeline_config_path, f"(num_classes={num_classes})")
+    print(
+        f"Wrote pipeline config: {pipeline_config_path} "
+        f"(model={model_name}, num_classes={num_classes}, batch_size={batch_size}, steps={num_steps})"
+    )
     return pipeline_config_path

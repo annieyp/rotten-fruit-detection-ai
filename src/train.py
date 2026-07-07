@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from dataset import load_data
-from model import build_model
+from model import DEFAULT_MODEL, build_model
 
 
 # Cloned tensorflow/models repo (the Object Detection API lives in research/).
@@ -35,6 +35,8 @@ def object_detection_dir():
 
 
 def train(pipeline_config_path, model_dir):
+    # model_main_tf2.py auto-uses MirroredStrategy across ALL local GPUs, so a
+    # multi-GPU instance is utilised without any extra flag.
     research_dir = object_detection_dir()
     run([
         sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
@@ -44,12 +46,15 @@ def train(pipeline_config_path, model_dir):
 
 
 def test_model(pipeline_config_path, model_dir):
+    # --eval_timeout=1 makes eval score the final checkpoint once and exit,
+    # instead of blocking ~1h waiting for new checkpoints (default 3600s).
     research_dir = object_detection_dir()
     run([
         sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
         f"--model_dir={model_dir}",
         f"--pipeline_config_path={pipeline_config_path}",
         f"--checkpoint_dir={model_dir}",
+        "--eval_timeout=1",
     ])
 
 
@@ -68,21 +73,24 @@ def export_model(pipeline_config_path, model_dir, export_dir):
 def main(
     data_dir="dataset",
     annotations_dir="annotations",
-    model_dir="models/efficientdet_d5",
-    export_dir="exported-models/efficientdet_d5",
-    batch_size=2,
-    num_steps=25000,
+    model_name=DEFAULT_MODEL,
+    num_steps=4000,
+    batch_size=8,
 ):
+    model_dir = f"models/{model_name}"
+    export_dir = f"exported-models/{model_name}"
+
     # Step 1: build label_map.pbtxt + TFRecords from the raw dataset/ CSV exports.
     record_paths, label_map_path, class_names = load_data(data_dir, annotations_dir)
     eval_record_path = record_paths.get("valid", record_paths.get("test"))
 
-    # Step 2: download EfficientDet D5 and configure the pipeline for our classes.
+    # Step 2: download the pretrained model and configure the pipeline for our classes.
     pipeline_config_path = build_model(
         label_map_path=label_map_path,
         train_record_path=record_paths["train"],
         eval_record_path=eval_record_path,
         model_dir=model_dir,
+        model_name=model_name,
         batch_size=batch_size,
         num_steps=num_steps,
     )
