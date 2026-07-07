@@ -7,8 +7,7 @@ from model import build_model
 def train(model, train_ds, val_ds, epochs=20, learning_rate=0.001):
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        box_loss="smooth_l1",
-        classification_loss="focal",
+        box_loss=keras.losses.MeanAbsoluteError(reduction="sum"),
     )
     return model.fit(train_ds, validation_data=val_ds, epochs=epochs)
 
