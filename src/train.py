@@ -1,116 +1,45 @@
-import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
+import keras
 
 from dataset import load_data
-from model import DEFAULT_MODEL, build_model
+from model import build_model
 
 
-# Cloned tensorflow/models repo (the Object Detection API lives in research/).
-API_REPO_DIR = Path("tensorflow_models")
+def train(model, train_ds, val_ds, epochs=20, learning_rate=0.001):
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        box_loss="smooth_l1",
+        classification_loss="focal",
+    )
+    return model.fit(train_ds, validation_data=val_ds, epochs=epochs)
 
 
-def run(command, cwd=None):
-    env = {
-        **os.environ,
-        # The API targets Keras 2; TF 2.16+ defaults to Keras 3. tf-keras + this
-        # flag routes tf.keras back to the Keras 2 API the API expects.
-        "TF_USE_LEGACY_KERAS": "1",
-    }
-    subprocess.run(command, cwd=cwd, check=True, env=env)
-
-
-def object_detection_dir():
-    """Clone tensorflow/models and install the Object Detection API if needed."""
-    research_dir = API_REPO_DIR / "research"
-
-    if not API_REPO_DIR.exists():
-        run(["git", "clone", "--depth", "1",
-             "https://github.com/tensorflow/models.git", str(API_REPO_DIR)])
-        # Use grpcio-tools' bundled protoc, not the system one: apt's protoc is
-        # ancient (~3.12) and emits old-style _pb2.py that modern protobuf (5/6,
-        # which TF 2.16+ requires) can't parse. grpc_tools.protoc is current.
-        protos = [str(p.relative_to(research_dir))
-                  for p in (research_dir / "object_detection" / "protos").glob("*.proto")]
-        run([sys.executable, "-m", "grpc_tools.protoc", "-I.", *protos, "--python_out=."],
-            cwd=research_dir)
-        shutil.copy2(
-            research_dir / "object_detection" / "packages" / "tf2" / "setup.py",
-            research_dir / "setup.py",
-        )
-        run([sys.executable, "-m", "pip", "install", "-q", "."], cwd=research_dir)
-
-    return research_dir
-
-
-def train(pipeline_config_path, model_dir):
-    # model_main_tf2.py auto-uses MirroredStrategy across ALL local GPUs, so a
-    # multi-GPU instance is utilised without any extra flag.
-    research_dir = object_detection_dir()
-    run([
-        sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
-        f"--model_dir={model_dir}",
-        f"--pipeline_config_path={pipeline_config_path}",
-    ])
-
-
-def test_model(pipeline_config_path, model_dir):
-    # --eval_timeout=1 makes eval score the final checkpoint once and exit,
-    # instead of blocking ~1h waiting for new checkpoints (default 3600s).
-    research_dir = object_detection_dir()
-    run([
-        sys.executable, str(research_dir / "object_detection" / "model_main_tf2.py"),
-        f"--model_dir={model_dir}",
-        f"--pipeline_config_path={pipeline_config_path}",
-        f"--checkpoint_dir={model_dir}",
-        "--eval_timeout=1",
-    ])
-
-
-def export_model(pipeline_config_path, model_dir, export_dir):
-    research_dir = object_detection_dir()
-    Path(export_dir).mkdir(parents=True, exist_ok=True)
-    run([
-        sys.executable, str(research_dir / "object_detection" / "exporter_main_v2.py"),
-        "--input_type=image_tensor",
-        f"--pipeline_config_path={pipeline_config_path}",
-        f"--trained_checkpoint_dir={model_dir}",
-        f"--output_directory={export_dir}",
-    ])
+def test_model(model, test_ds):
+    results = model.evaluate(test_ds, return_dict=True)
+    print("Test results:", results)
+    return results
 
 
 def main(
     data_dir="dataset",
-    annotations_dir="annotations",
-    model_name=DEFAULT_MODEL,
-    num_steps=4000,
-    batch_size=8,
+    model_path="retinanet_fruit.keras",
+    image_size=640,
+    batch_size=4,
+    epochs=20,
+    learning_rate=0.001,
 ):
-    model_dir = f"models/{model_name}"
-    export_dir = f"exported-models/{model_name}"
+    datasets, class_names = load_data(data_dir, image_size=image_size, batch_size=batch_size)
 
-    # Step 1: build label_map.pbtxt + TFRecords from the raw dataset/ CSV exports.
-    record_paths, label_map_path, class_names = load_data(data_dir, annotations_dir)
-    eval_record_path = record_paths.get("valid", record_paths.get("test"))
+    model = build_model(num_classes=len(class_names))
 
-    # Step 2: download the pretrained model and configure the pipeline for our classes.
-    pipeline_config_path = build_model(
-        label_map_path=label_map_path,
-        train_record_path=record_paths["train"],
-        eval_record_path=eval_record_path,
-        model_dir=model_dir,
-        model_name=model_name,
-        batch_size=batch_size,
-        num_steps=num_steps,
-    )
+    val_ds = datasets.get("valid", datasets.get("test"))
+    train(model, datasets["train"], val_ds, epochs=epochs, learning_rate=learning_rate)
 
-    train(pipeline_config_path, model_dir)
-    test_model(pipeline_config_path, model_dir)
-    export_model(pipeline_config_path, model_dir, export_dir)
+    if "test" in datasets:
+        test_model(model, datasets["test"])
 
-    print("Exported model:", export_dir)
+    model.save(model_path)
+    print("Saved model:", model_path)
+    return model
 
 
 if __name__ == "__main__":

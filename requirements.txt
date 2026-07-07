@@ -1,5 +1,4 @@
 tensorflow
-tf-keras
-grpcio-tools
-opencv-python
+keras
+keras-hub
 numpy
