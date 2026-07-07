@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,13 @@ API_REPO_DIR = Path("tensorflow_models")
 
 
 def run(command, cwd=None):
-    subprocess.run(command, cwd=cwd, check=True)
+    env = {
+        **os.environ,
+        # The API targets Keras 2; TF 2.16+ defaults to Keras 3. tf-keras + this
+        # flag routes tf.keras back to the Keras 2 API the API expects.
+        "TF_USE_LEGACY_KERAS": "1",
+    }
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def object_detection_dir():
@@ -22,9 +29,13 @@ def object_detection_dir():
     if not API_REPO_DIR.exists():
         run(["git", "clone", "--depth", "1",
              "https://github.com/tensorflow/models.git", str(API_REPO_DIR)])
+        # Use grpcio-tools' bundled protoc, not the system one: apt's protoc is
+        # ancient (~3.12) and emits old-style _pb2.py that modern protobuf (5/6,
+        # which TF 2.16+ requires) can't parse. grpc_tools.protoc is current.
         protos = [str(p.relative_to(research_dir))
                   for p in (research_dir / "object_detection" / "protos").glob("*.proto")]
-        run(["protoc", *protos, "--python_out=."], cwd=research_dir)
+        run([sys.executable, "-m", "grpc_tools.protoc", "-I.", *protos, "--python_out=."],
+            cwd=research_dir)
         shutil.copy2(
             research_dir / "object_detection" / "packages" / "tf2" / "setup.py",
             research_dir / "setup.py",
