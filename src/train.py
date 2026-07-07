@@ -1,6 +1,7 @@
 import keras
 
 from dataset import load_data
+from metrics import DetectionMetrics
 from model import build_model
 
 
@@ -9,7 +10,9 @@ def train(model, train_ds, val_ds, epochs=20, learning_rate=0.001):
         optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
         box_loss=keras.losses.MeanAbsoluteError(reduction="sum"),
     )
-    return model.fit(train_ds, validation_data=val_ds, epochs=epochs)
+    # RetinaNet rejects metrics in compile(), so report precision/recall/F1 via a callback.
+    callbacks = [DetectionMetrics(val_ds)] if val_ds is not None else []
+    return model.fit(train_ds, validation_data=val_ds, epochs=epochs, callbacks=callbacks)
 
 
 def test_model(model, test_ds):
