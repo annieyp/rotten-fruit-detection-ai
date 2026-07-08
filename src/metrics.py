@@ -24,11 +24,12 @@ class DetectionMetrics(keras.callbacks.Callback):
     same class with IoU >= iou_threshold.
     """
 
-    def __init__(self, val_ds, iou_threshold=0.5, score_threshold=0.3):
+    def __init__(self, val_ds, iou_threshold=0.5, score_threshold=0.3, max_batches=None):
         super().__init__()
         self.val_ds = val_ds
         self.iou_threshold = iou_threshold
         self.score_threshold = score_threshold
+        self.max_batches = max_batches
 
     @staticmethod
     def _key(pred, *names):
@@ -40,7 +41,8 @@ class DetectionMetrics(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         tp = fp = fn = 0
 
-        for images, y in self.val_ds:
+        dataset = self.val_ds.take(self.max_batches) if self.max_batches else self.val_ds
+        for images, y in dataset:
             pred = self.model.predict(images, verbose=0)
             pred_boxes = self._key(pred, "boxes")
             pred_labels = self._key(pred, "labels", "classes")
