@@ -73,6 +73,8 @@ def prepare_jumpstart_dataset(data_dir="dataset", output_dir="jumpstart_data", s
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
     images_dir = output_dir / "images"
+    if images_dir.exists():
+        shutil.rmtree(images_dir)  # start clean so stale renamed images don't linger
     images_dir.mkdir(parents=True, exist_ok=True)
 
     rows_by_split = {}
@@ -85,7 +87,9 @@ def prepare_jumpstart_dataset(data_dir="dataset", output_dir="jumpstart_data", s
         raise ValueError(f"Found none of the splits {splits} inside {data_dir}.")
 
     class_names = collect_class_names(rows_by_split)
-    class_to_id = {name: index for index, name in enumerate(class_names)}  # 0-indexed
+    # 1-indexed: the TF Object Detection API reserves category_id 0 for background,
+    # so 0-indexed ids make the trainer build an empty dataset (0 samples/sec).
+    class_to_id = {name: index for index, name in enumerate(class_names, start=1)}
 
     images = []
     annotations = []
@@ -98,8 +102,12 @@ def prepare_jumpstart_dataset(data_dir="dataset", output_dir="jumpstart_data", s
             boxes_by_image.setdefault(row["filename"], []).append(row)
 
         for filename, boxes in boxes_by_image.items():
-            # Prefix with split so filenames stay unique if splits are combined.
-            dst_name = f"{split}__{filename}"
+            # The JumpStart trainer pairs images to per-image annotations by stripping
+            # the extension, but it splits on the FIRST dot in one place and the LAST
+            # dot in another. Roboflow names have multiple dots (e.g. "x_jpg.rf.<hash>.jpg"),
+            # so those disagree and every image fails to pair -> 0 training samples.
+            # A single-dot name (img<id>.jpg) makes both agree.
+            dst_name = f"img{image_id}{Path(filename).suffix.lower()}"
             shutil.copy2(split_dir / filename, images_dir / dst_name)
 
             first = boxes[0]

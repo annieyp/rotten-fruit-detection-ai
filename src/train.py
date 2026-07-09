@@ -15,7 +15,7 @@ def train(
     output_path=None,
     model_id=DEFAULT_MODEL_ID,
     model_version=DEFAULT_MODEL_VERSION,
-    instance_type="ml.g5.xlarge",
+    instance_type="ml.g4dn.xlarge",
     epochs=5,
     extra_hyperparameters=None,
 ):
