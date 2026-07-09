@@ -1,1 +1,3 @@
-sagemaker
+# SDK v3 restructured into namespace packages and dropped top-level Session/
+# get_execution_role/JumpStartEstimator. Pin to v2, which the JumpStart flow targets.
+sagemaker<3
