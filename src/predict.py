@@ -1,34 +1,36 @@
-import keras
-import keras_hub  # noqa: F401  (registers RetinaNet classes for load_model)
-import tensorflow as tf
-
-from model import load_model
+from sagemaker.deserializers import JSONDeserializer
+from sagemaker.serializers import IdentitySerializer
 
 
-def predict_image(model_path, image_path, image_size=640, confidence=0.3):
-    model = load_model(model_path)
+def predict_image(predictor, image_path, confidence=0.3, class_names=None):
+    """Run inference on a JumpStart Object Detection endpoint for one image."""
+    predictor.serializer = IdentitySerializer("application/x-image")
+    predictor.deserializer = JSONDeserializer(accept="application/json;verbose")
 
-    image = tf.io.decode_image(tf.io.read_file(str(image_path)), channels=3, expand_animations=False)
-    image = tf.image.resize_with_pad(image, image_size, image_size)
-    image = tf.cast(image, tf.float32)
+    with open(image_path, "rb") as image_file:
+        payload = image_file.read()
 
-    outputs = model.predict(image[tf.newaxis, ...])
+    result = predictor.predict(payload)
 
-    boxes = outputs["boxes"][0]
-    labels = outputs["labels"][0]
-    scores = outputs["confidence"][0]
+    # JumpStart OD returns normalized_boxes as [xmin, xmax, ymin, ymax].
+    boxes = result["normalized_boxes"]
+    classes = result["classes"]
+    scores = result["scores"]
+    labels = result.get("labels", classes)
 
     detections = []
-    for box, label, score in zip(boxes, labels, scores):
-        if label < 0 or float(score) < confidence:
+    for box, class_id, score, label in zip(boxes, classes, scores, labels):
+        if float(score) < confidence:
             continue
 
-        ymin, xmin, ymax, xmax = [float(v) for v in box]
+        xmin, xmax, ymin, ymax = box
+        name = class_names[int(class_id)] if class_names else label
         detections.append(
             {
-                "class_id": int(label),
+                "class": name,
+                "class_id": int(class_id),
                 "confidence": float(score),
-                "box": {"ymin": ymin, "xmin": xmin, "ymax": ymax, "xmax": xmax},
+                "box": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
             }
         )
 

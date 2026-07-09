@@ -1,63 +1,42 @@
-import keras
-
-from dataset import load_data
-from metrics import DetectionMetrics
-from model import build_model
+from sagemaker import hyperparameters as hp
+from sagemaker.jumpstart.estimator import JumpStartEstimator
 
 
-def train(model, train_ds, val_ds, epochs=10, learning_rate=0.001, steps_per_epoch=None):
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        box_loss=keras.losses.MeanAbsoluteError(reduction="sum"),
-    )
-    # RetinaNet rejects metrics in compile(), so report precision/recall/F1 via a callback.
-    # Cap eval batches so the per-epoch metric pass stays cheap.
-    callbacks = [DetectionMetrics(val_ds, max_batches=20)] if val_ds is not None else []
-    return model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs,
-        steps_per_epoch=steps_per_epoch,
-        callbacks=callbacks,
-    )
+# SageMaker JumpStart pre-built EfficientDet D1 (SSD, 640x640, COCO17). AWS ships the
+# training container with protobuf/pycocotools/TF/object_detection already resolved, so
+# nothing runs the Object Detection API locally — the notebook only orchestrates.
+DEFAULT_MODEL_ID = "tensorflow-od1-ssd-efficientdet-d1-640x640-coco17-tpu-8"
+DEFAULT_MODEL_VERSION = "*"
 
 
-def test_model(model, test_ds):
-    results = model.evaluate(test_ds, return_dict=True)
-    print("Test results:", results)
-    return results
-
-
-def main(
-    data_dir="dataset",
-    model_path="retinanet_fruit.keras",
-    image_size=512,
-    batch_size=4,
-    epochs=10,
-    learning_rate=0.001,
-    steps_per_epoch=None,
+def train(
+    training_s3_uri,
+    role,
+    output_path=None,
+    model_id=DEFAULT_MODEL_ID,
+    model_version=DEFAULT_MODEL_VERSION,
+    instance_type="ml.g5.xlarge",
+    epochs=5,
+    extra_hyperparameters=None,
 ):
-    datasets, class_names = load_data(data_dir, image_size=image_size, batch_size=batch_size)
+    """Launch a JumpStart fine-tuning job on an ephemeral GPU instance."""
+    hyperparameters = hp.retrieve_default(model_id=model_id, model_version=model_version)
+    hyperparameters["epochs"] = str(epochs)
+    if extra_hyperparameters:
+        hyperparameters.update({k: str(v) for k, v in extra_hyperparameters.items()})
 
-    model = build_model(num_classes=len(class_names))
-
-    val_ds = datasets.get("valid", datasets.get("test"))
-    train(
-        model,
-        datasets["train"],
-        val_ds,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        steps_per_epoch=steps_per_epoch,
+    estimator = JumpStartEstimator(
+        model_id=model_id,
+        model_version=model_version,
+        role=role,
+        instance_type=instance_type,
+        hyperparameters=hyperparameters,
+        output_path=output_path,
     )
-
-    if "test" in datasets:
-        test_model(model, datasets["test"])
-
-    model.save(model_path)
-    print("Saved model:", model_path)
-    return model
+    estimator.fit({"training": training_s3_uri})
+    return estimator
 
 
-if __name__ == "__main__":
-    main()
+def deploy(estimator, instance_type="ml.m5.xlarge"):
+    """Deploy the fine-tuned model to a real-time endpoint. Remember to delete it after."""
+    return estimator.deploy(instance_type=instance_type)

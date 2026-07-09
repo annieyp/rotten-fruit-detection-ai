@@ -1,4 +1,1 @@
-tensorflow
-keras
-keras-hub
-numpy
+sagemaker
