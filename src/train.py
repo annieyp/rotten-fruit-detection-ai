@@ -12,7 +12,7 @@ def train(
     output_path=None,
     model_name=DEFAULT_YOLO_MODEL,
     instance_type="ml.g5.2xlarge",
-    epochs=75,
+    epochs=100,
     batch_size=16,
     learning_rate=0.001,
     optimizer="SGD",
