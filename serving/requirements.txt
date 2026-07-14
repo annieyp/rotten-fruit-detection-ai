@@ -1,0 +1,3 @@
+# Installed by the SageMaker PyTorch Inference Toolkit at container start.
+# No compiled/GPU-build-time deps here, which is why this doesn't need a custom image.
+ultralytics

@@ -1,0 +1,46 @@
+#!/usr/bin/env python
+import json, shutil, traceback
+from pathlib import Path
+import yaml
+from ultralytics import YOLO
+
+PREFIX = Path("/opt/ml")
+DATA_DIR = PREFIX / "input" / "data" / "training"
+MODEL_DIR = PREFIX / "model"
+
+def load_hyperparameters():
+    raw = json.loads((PREFIX / "input" / "config" / "hyperparameters.json").read_text())
+    return {
+        "model": raw.get("model", "yolo26n.pt"),
+        "epochs": int(raw.get("epochs", 75)),
+        "batch": int(raw.get("batch", 16)),
+        "lr0": float(raw.get("lr0", 0.001)),
+        "optimizer": raw.get("optimizer", "SGD"),
+        "imgsz": int(raw.get("imgsz", 640)),
+    }
+
+def resolve_data_yaml():
+    config = yaml.safe_load((DATA_DIR / "data.yaml").read_text())
+    config["path"] = str(DATA_DIR)  # Roboflow's path won't match where SageMaker mounted it
+    resolved = Path("/tmp/data.yaml")
+    resolved.write_text(yaml.dump(config))
+    return resolved
+
+def main():
+    hp = load_hyperparameters()
+    model = YOLO(hp["model"])
+    model.train(
+        data=str(resolve_data_yaml()),
+        epochs=hp["epochs"], batch=hp["batch"], lr0=hp["lr0"],
+        optimizer=hp["optimizer"], imgsz=hp["imgsz"],
+        project=str(MODEL_DIR), name="run", exist_ok=True,
+    )
+    shutil.copy2(MODEL_DIR / "run" / "weights" / "best.pt", MODEL_DIR / "best.pt")
+    shutil.rmtree(MODEL_DIR / "run", ignore_errors=True)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        (PREFIX / "output" / "failure").write_text(traceback.format_exc())
+        raise

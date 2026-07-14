@@ -1,4 +1,5 @@
 from sagemaker.estimator import Estimator
+from sagemaker.pytorch import PyTorchModel
 
 
 DEFAULT_YOLO_MODEL = "yolo26n.pt"
@@ -62,9 +63,32 @@ def train(
     return estimator
 
 
-def deploy(estimator, instance_type="ml.m5.xlarge"):
-    """Deploy the fine-tuned model to a real-time endpoint, using the same image's
-    `serve` entrypoint (must expose GET /ping and POST /invocations on port 8080, per
-    SageMaker's BYOC serving contract -- see predict.predict_image for the expected
-    /invocations request/response format). Remember to delete it after."""
-    return estimator.deploy(instance_type=instance_type)
+def deploy(
+    estimator,
+    instance_type="ml.m5.xlarge",
+    framework_version="2.3",
+    py_version="py311",
+    source_dir="serving",
+    entry_point="inference.py",
+):
+    """Deploy the fine-tuned model to a real-time endpoint.
+
+    Unlike training, serving does NOT reuse the custom training image: ultralytics has
+    no compiled/GPU-build-time dependencies, so this runs on AWS's stock managed PyTorch
+    inference container instead, extended the standard SageMaker way -- source_dir's
+    inference.py (model_fn/input_fn/predict_fn/output_fn) and requirements.txt get
+    packaged into the model artifact and the container installs/runs them at deploy
+    time. See predict.predict_image for the expected /invocations request/response
+    format. If framework_version/py_version aren't a combination SageMaker currently
+    publishes a DLC for, deploy() will raise -- check `sagemaker.image_uris.retrieve`
+    for valid pairs. Remember to delete the endpoint after.
+    """
+    model = PyTorchModel(
+        model_data=estimator.model_data,
+        role=estimator.role,
+        entry_point=entry_point,
+        source_dir=source_dir,
+        framework_version=framework_version,
+        py_version=py_version,
+    )
+    return model.deploy(initial_instance_count=1, instance_type=instance_type)
