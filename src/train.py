@@ -1,7 +1,7 @@
 from sagemaker.estimator import Estimator
 
 
-DEFAULT_YOLO_MODEL = "yolov8n.pt"
+DEFAULT_YOLO_MODEL = "yolo26n.pt"
 
 
 def train(
@@ -18,19 +18,22 @@ def train(
     imgsz=640,
     extra_hyperparameters=None,
 ):
-    """Fine-tune YOLOv8 on an ephemeral GPU instance using a custom (bring-your-own)
-    container image -- YOLOv8 isn't in SageMaker JumpStart's built-in model zoo, so this
+    """Fine-tune YOLO26 on an ephemeral GPU instance using a custom (bring-your-own)
+    container image -- YOLO26 isn't in SageMaker JumpStart's built-in model zoo, so this
     runs against whatever image_uri you built and pushed to ECR yourself.
+
+    training_s3_uri should point at a Roboflow "YOLOv8" (Ultralytics) format export
+    uploaded as-is -- train/images, train/labels, valid/images, valid/labels, and
+    data.yaml at the root. No local conversion step needed.
 
     Contract your image's training entrypoint must satisfy (standard SageMaker BYOC):
       - Runs `docker run <image> train`, i.e. a `train` executable on PATH.
       - Reads hyperparameters from /opt/ml/input/config/hyperparameters.json (values
         are strings: "model", "epochs", "batch", "lr0", "optimizer", "imgsz").
       - Reads the dataset from /opt/ml/input/data/training (the "training" channel
-        below), which contains images/, labels/, and data.yaml from
-        dataset.prepare_yolo_dataset. data.yaml ships with `path: .` (relative) since
-        it's built before the S3 upload -- your entrypoint must rewrite `path` to the
-        actual mounted channel directory before handing the yaml to a trainer, since
+        below). Roboflow's data.yaml often has a `path` that's absolute or relative to
+        wherever it was originally downloaded -- your entrypoint must rewrite `path` to
+        the actual mounted channel directory before handing the yaml to a trainer, since
         that directory differs job to job.
       - Writes the final model artifact(s) under /opt/ml/model.
     """

@@ -3,7 +3,7 @@ from sagemaker.serializers import IdentitySerializer
 
 
 def predict_image(predictor, image_path, confidence=0.3):
-    """Run inference on a YOLOv8 SageMaker endpoint for one image.
+    """Run inference on a YOLO26 SageMaker endpoint for one image.
 
     Expects your image's /invocations route to accept "application/x-image" (raw JPEG
     bytes) and return application/json shaped like:
