@@ -1,8 +1,9 @@
 import csv
-import json
 import shutil
 from collections import OrderedDict
 from pathlib import Path
+
+import yaml
 
 
 SPLITS = ("train", "valid", "test")
@@ -59,23 +60,23 @@ def collect_class_names(rows_by_split):
     return list(class_names.keys())
 
 
-def prepare_jumpstart_dataset(data_dir="dataset", output_dir="jumpstart_data", splits=("train",)):
-    """Convert a Roboflow TF CSV export into SageMaker JumpStart Object Detection format.
+def prepare_yolo_dataset(data_dir="dataset", output_dir="yolo_data", splits=("train", "valid", "test")):
+    """Convert a Roboflow TF CSV export into Ultralytics YOLO format.
 
     Writes:
-        output_dir/images/<split>__<file>.jpg
-        output_dir/annotations.json   {"images": [...], "annotations": [...]}
-        output_dir/class_names.txt    (category_id -> name, one per line)
+        output_dir/images/<split>/<file>
+        output_dir/labels/<split>/<file>.txt   (class x_center y_center width height, normalized)
+        output_dir/data.yaml                   ({path, train, val, test, nc, names})
 
-    JumpStart bbox is [xmin, ymin, xmax, ymax] in absolute pixels, which matches the
-    Roboflow CSV directly. Returns (output_dir, class_names).
+    Unlike JumpStart's TF Object Detection API, YOLO class ids are 0-indexed with no
+    reserved background class. Ultralytics requires a "val" split to train, so "valid"
+    is used for it when present, otherwise it falls back to "train". Returns
+    (output_dir, class_names).
     """
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
-    images_dir = output_dir / "images"
-    if images_dir.exists():
-        shutil.rmtree(images_dir)  # start clean so stale renamed images don't linger
-    images_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)  # start clean so stale renamed images don't linger
 
     rows_by_split = {}
     for split in splits:
@@ -87,56 +88,48 @@ def prepare_jumpstart_dataset(data_dir="dataset", output_dir="jumpstart_data", s
         raise ValueError(f"Found none of the splits {splits} inside {data_dir}.")
 
     class_names = collect_class_names(rows_by_split)
-    # 1-indexed: the TF Object Detection API reserves category_id 0 for background,
-    # so 0-indexed ids make the trainer build an empty dataset (0 samples/sec).
-    class_to_id = {name: index for index, name in enumerate(class_names, start=1)}
+    class_to_id = {name: index for index, name in enumerate(class_names)}
 
-    images = []
-    annotations = []
-    image_id = 0
-
+    total_boxes = 0
     for split, rows in rows_by_split.items():
         split_dir = data_dir / split
+        images_dir = output_dir / "images" / split
+        labels_dir = output_dir / "labels" / split
+        images_dir.mkdir(parents=True, exist_ok=True)
+        labels_dir.mkdir(parents=True, exist_ok=True)
+
         boxes_by_image = OrderedDict()
         for row in rows:
             boxes_by_image.setdefault(row["filename"], []).append(row)
 
         for filename, boxes in boxes_by_image.items():
-            # The JumpStart trainer pairs images to per-image annotations by stripping
-            # the extension, but it splits on the FIRST dot in one place and the LAST
-            # dot in another. Roboflow names have multiple dots (e.g. "x_jpg.rf.<hash>.jpg"),
-            # so those disagree and every image fails to pair -> 0 training samples.
-            # A single-dot name (img<id>.jpg) makes both agree.
-            dst_name = f"img{image_id}{Path(filename).suffix.lower()}"
-            shutil.copy2(split_dir / filename, images_dir / dst_name)
+            shutil.copy2(split_dir / filename, images_dir / filename)
 
-            first = boxes[0]
-            images.append(
-                {
-                    "file_name": dst_name,
-                    "height": first["height"],
-                    "width": first["width"],
-                    "id": image_id,
-                }
-            )
+            width, height = boxes[0]["width"], boxes[0]["height"]
+            lines = []
             for box in boxes:
-                annotations.append(
-                    {
-                        "image_id": image_id,
-                        "bbox": [box["xmin"], box["ymin"], box["xmax"], box["ymax"]],
-                        "category_id": class_to_id[box["class"]],
-                    }
+                x_center = (box["xmin"] + box["xmax"]) / 2 / width
+                y_center = (box["ymin"] + box["ymax"]) / 2 / height
+                box_width = (box["xmax"] - box["xmin"]) / width
+                box_height = (box["ymax"] - box["ymin"]) / height
+                lines.append(
+                    f"{class_to_id[box['class']]} {x_center:.6f} {y_center:.6f} "
+                    f"{box_width:.6f} {box_height:.6f}"
                 )
-            image_id += 1
+            (labels_dir / f"{Path(filename).stem}.txt").write_text("\n".join(lines) + "\n")
+            total_boxes += len(boxes)
 
-    (output_dir / "annotations.json").write_text(
-        json.dumps({"images": images, "annotations": annotations})
-    )
-    (output_dir / "class_names.txt").write_text("\n".join(class_names) + "\n")
+    data_yaml = {
+        "path": ".",
+        "train": "images/train" if "train" in rows_by_split else "images/valid",
+        "val": "images/valid" if "valid" in rows_by_split else "images/train",
+        "nc": len(class_names),
+        "names": class_names,
+    }
+    if "test" in rows_by_split:
+        data_yaml["test"] = "images/test"
+    (output_dir / "data.yaml").write_text(yaml.dump(data_yaml, sort_keys=False))
 
-    print(
-        f"Prepared {len(images)} images, {len(annotations)} boxes, "
-        f"{len(class_names)} classes -> {output_dir}"
-    )
+    print(f"Prepared {total_boxes} boxes across {len(class_names)} classes -> {output_dir}")
     print("Classes:", class_names)
     return output_dir, class_names
