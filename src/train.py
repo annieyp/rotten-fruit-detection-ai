@@ -2,7 +2,7 @@ from sagemaker.estimator import Estimator
 from sagemaker.pytorch import PyTorchModel
 
 
-DEFAULT_YOLO_MODEL = "yolo26n.pt"
+DEFAULT_YOLO_MODEL = "yolo26m.pt"
 
 
 def train(
@@ -11,13 +11,13 @@ def train(
     image_uri,
     output_path=None,
     model_name=DEFAULT_YOLO_MODEL,
-    instance_type="ml.g5.2xlarge",
-    epochs=100,
-    batch_size=16,
+    instance_type="ml.g6.large",
+    epochs=170,
+    batch_size=32,
     learning_rate=0.001,
-    optimizer="SGD",
+    optimizer= "auto",
     imgsz=640,
-    extra_hyperparameters=None,
+    extra_hyperparameters=None
 ):
     """Fine-tune YOLO26 on an ephemeral GPU instance using a custom (bring-your-own)
     container image -- YOLO26 isn't in SageMaker JumpStart's built-in model zoo, so this
