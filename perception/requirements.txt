@@ -1,0 +1,8 @@
+opencv-python
+numpy
+ultralytics
+
+# picamera2 is NOT installed via this file -- on Raspberry Pi OS it ships as a system
+# package tied to libcamera: `sudo apt install -y python3-picamera2`. If you're using a
+# virtualenv, create it with `--system-site-packages` so it can see the apt install
+# (pip's own `picamera2` package won't work correctly on real Pi hardware).
