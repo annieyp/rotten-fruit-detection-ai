@@ -8,7 +8,10 @@ JPGs to any computer, and run this there. Easier to debug with --show on a machi
 with a display than on the Pi itself.
 
 Usage:
-    python calibration.py --images-dir chessboard_photos --pattern-size 7 6 --square-size-mm 25
+    python3 calibration.py --images-dir chessboard_photos --pattern-size 7 6 --square-size-mm 15
+
+Note:
+    For pattern size, 7 x 6 is the inner corners, so the actual board should b 8 x 7
 """
 import argparse
 import glob
@@ -30,9 +33,17 @@ def calibrate(images_dir, pattern_size=(7, 6), square_size_mm=25.0, show=False):
     objp *= square_size_mm  # real-world units, so calibration output is in mm
 
     objpoints, imgpoints = [], []
-    image_paths = sorted(glob.glob(str(Path(images_dir) / "*.jpg")))
+    # set() to dedupe: on case-insensitive filesystems (e.g. default macOS), "*.jpg"
+    # and "*.JPG" match the same files, which would otherwise double-count every photo.
+    image_paths = sorted(
+        {
+            p
+            for pattern in ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG", "*.png")
+            for p in glob.glob(str(Path(images_dir) / pattern))
+        }
+    )
     if not image_paths:
-        raise ValueError(f"No .jpg images found in {images_dir}")
+        raise ValueError(f"No .jpg/.jpeg/.png images found in {images_dir}")
 
     gray_shape = None
     for path in image_paths:

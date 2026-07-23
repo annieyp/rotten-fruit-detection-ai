@@ -13,6 +13,9 @@ camera with no depth sensing can't recover it from one image.
 Print an ArUco marker (cv2.aruco.DICT_4X4_50) at a known physical size and place it
 flat on the same surface as the fruit, in view of the camera, before running this.
 Needs OpenCV >= 4.7 for the cv2.aruco.ArucoDetector API.
+
+Usage:
+    python3 pose.py --weights "/Users/ayp/Library/Mobile Documents/com~apple~CloudDocs/Documents/Documents - Annie’s MacBook Air/Rotten Fruit Detection/best.pt" --marker-size-mm 50 --camera-index 1
 """
 import argparse
 from dataclasses import dataclass
@@ -60,14 +63,15 @@ def _segment_largest_contour(crop):
 
 
 def _find_marker_homography(undistorted, marker_size_mm, aruco_dict=ARUCO_DICT):
-    """Detects the ArUco marker and returns a homography mapping undistorted image
-    pixels to real-world (X, Y) mm on the marker's plane, or None if not found."""
+    """Detects the ArUco marker and returns (image_corners, homography), where
+    homography maps undistorted image pixels to real-world (X, Y) mm on the marker's
+    plane. Returns (None, None) if no marker was found."""
     gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
     dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict)
     detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
     corners, ids, _ = detector.detectMarkers(gray)
     if ids is None or len(corners) == 0:
-        return None
+        return None, None
 
     # detected corner order is top-left, top-right, bottom-right, bottom-left
     image_corners = corners[0].reshape(4, 2).astype(np.float32)
@@ -76,7 +80,7 @@ def _find_marker_homography(undistorted, marker_size_mm, aruco_dict=ARUCO_DICT):
         dtype=np.float32,
     )
     homography, _ = cv2.findHomography(image_corners, world_corners)
-    return homography
+    return image_corners, homography
 
 
 def _pixels_to_plane(homography, points_px):
@@ -86,16 +90,27 @@ def _pixels_to_plane(homography, points_px):
     return mapped.reshape(-1, 2)
 
 
-def estimate_poses(frame, model, camera_matrix, dist_coeffs, marker_size_mm, confidence=0.3):
+def estimate_poses(frame, model, camera_matrix, dist_coeffs, marker_size_mm, confidence=0.3, draw=False):
     """frame: a BGR image containing both the fruit and the reference ArUco marker.
     Returns one FruitPose per detection above `confidence`, or an empty list (with a
-    printed warning) if the marker isn't visible in this frame."""
+    printed warning) if the marker isn't visible in this frame. If draw=True, also
+    returns a debug frame annotated with the marker outline, YOLO boxes, and each
+    fruit's measured rotated rect -- meant for a live preview, not for measurement."""
     undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
+    debug_frame = undistorted.copy() if draw else None
 
-    homography = _find_marker_homography(undistorted, marker_size_mm)
+    marker_corners, homography = _find_marker_homography(undistorted, marker_size_mm)
     if homography is None:
+        if draw:
+            cv2.putText(
+                debug_frame, "No ArUco marker found", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2
+            )
+            return [], debug_frame
         print("No ArUco marker found in frame -- can't establish real-world scale, skipping.")
         return []
+
+    if draw:
+        cv2.polylines(debug_frame, [marker_corners.astype(np.int32)], True, (0, 255, 0), 2)
 
     result = model.predict(undistorted, verbose=False)[0]
 
@@ -108,6 +123,8 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, marker_size_mm, con
         crop = undistorted[ymin:ymax, xmin:xmax]
         contour = _segment_largest_contour(crop)
         if contour is None:
+            if draw:
+                cv2.rectangle(debug_frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 2)
             continue
 
         rect = cv2.minAreaRect(contour)
@@ -126,18 +143,24 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, marker_size_mm, con
         long_edge = world_pts[2] - world_pts[1] if side_b >= side_a else world_pts[1] - world_pts[0]
         orientation_deg = float(np.degrees(np.arctan2(long_edge[1], long_edge[0])))
 
-        poses.append(
-            FruitPose(
-                class_name=result.names[int(box.cls[0])],
-                confidence=float(box.conf[0]),
-                position_mm=(float(center_mm[0]), float(center_mm[1])),
-                orientation_deg=orientation_deg,
-                width_mm=float(width_mm),
-                length_mm=float(length_mm),
-            )
+        pose = FruitPose(
+            class_name=result.names[int(box.cls[0])],
+            confidence=float(box.conf[0]),
+            position_mm=(float(center_mm[0]), float(center_mm[1])),
+            orientation_deg=orientation_deg,
+            width_mm=float(width_mm),
+            length_mm=float(length_mm),
         )
+        poses.append(pose)
 
-    return poses
+        if draw:
+            cv2.drawContours(debug_frame, [box_pts.astype(np.int32)], 0, (255, 128, 0), 2)
+            label = f"{pose.class_name} {pose.width_mm:.0f}x{pose.length_mm:.0f}mm {pose.orientation_deg:.0f}deg"
+            cv2.putText(
+                debug_frame, label, (xmin, max(0, ymin - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 128, 0), 2
+            )
+
+    return (poses, debug_frame) if draw else poses
 
 
 def capture_frame_picamera2():
@@ -156,7 +179,7 @@ def capture_frame_picamera2():
     return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
 
-def capture_frame_webcam(camera_index=0):
+def capture_frame_webcam(camera_index=1):
     """Works with any regular USB/built-in webcam (e.g. testing on a laptop) via
     OpenCV's standard VideoCapture. Use --picamera on the Pi itself instead, since the
     Camera Module 3's CSI connection needs picamera2/libcamera, not VideoCapture."""
@@ -166,6 +189,54 @@ def capture_frame_webcam(camera_index=0):
     if not ok:
         raise RuntimeError(f"Could not read from camera index {camera_index}")
     return frame
+
+
+def iter_frames_webcam(camera_index=1):
+    """Yields frames continuously from a webcam, keeping the device open across
+    reads (unlike capture_frame_webcam, which is one-shot) -- for a live preview."""
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open camera index {camera_index}")
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError(f"Could not read from camera index {camera_index}")
+            yield frame
+    finally:
+        cap.release()
+
+
+def iter_frames_picamera2():
+    """Yields frames continuously from the Pi Camera Module via picamera2 -- for a
+    live preview. See capture_frame_picamera2 for the apt-install note."""
+    from picamera2 import Picamera2
+
+    picam2 = Picamera2()
+    picam2.configure(picam2.create_preview_configuration())
+    picam2.start()
+    try:
+        while True:
+            yield cv2.cvtColor(picam2.capture_array(), cv2.COLOR_RGB2BGR)
+    finally:
+        picam2.stop()
+
+
+def run_live(frame_source, model, camera_matrix, dist_coeffs, marker_size_mm, confidence=0.3):
+    """Shows a live window with the camera feed, the detected ArUco marker outline,
+    and each fruit's measured rotated box/orientation overlaid, updating every frame.
+    Press 'q' in the window to quit."""
+    print("Live preview running -- press 'q' in the window to quit.")
+    for frame in frame_source:
+        poses, debug_frame = estimate_poses(
+            frame, model, camera_matrix, dist_coeffs, marker_size_mm, confidence, draw=True
+        )
+        cv2.imshow("pose.py live preview", debug_frame)
+        for pose in poses:
+            print(pose)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
@@ -180,17 +251,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--picamera", action="store_true", help="capture via picamera2 (Pi Camera Module) instead of --camera-index"
     )
+    parser.add_argument(
+        "--live", action="store_true", help="show a live preview window instead of a single capture+print"
+    )
     args = parser.parse_args()
 
     camera_matrix, dist_coeffs = load_calibration(args.calibration)
     model = YOLO(args.weights)
 
-    if args.image:
-        frame = cv2.imread(args.image)
-    elif args.picamera:
-        frame = capture_frame_picamera2()
+    if args.live:
+        frame_source = iter_frames_picamera2() if args.picamera else iter_frames_webcam(args.camera_index)
+        run_live(frame_source, model, camera_matrix, dist_coeffs, args.marker_size_mm)
     else:
-        frame = capture_frame_webcam(args.camera_index)
+        if args.image:
+            frame = cv2.imread(args.image)
+        elif args.picamera:
+            frame = capture_frame_picamera2()
+        else:
+            frame = capture_frame_webcam(args.camera_index)
 
-    for pose in estimate_poses(frame, model, camera_matrix, dist_coeffs, args.marker_size_mm):
-        print(pose)
+        for pose in estimate_poses(frame, model, camera_matrix, dist_coeffs, args.marker_size_mm):
+            print(pose)
