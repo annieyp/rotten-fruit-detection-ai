@@ -15,7 +15,8 @@ flat on the same surface as the fruit, in view of the camera, before running thi
 Needs OpenCV >= 4.7 for the cv2.aruco.ArucoDetector API.
 
 Usage:
-    python3 pose.py --weights "/Users/ayp/Library/Mobile Documents/com~apple~CloudDocs/Documents/Documents - Annie’s MacBook Air/Rotten Fruit Detection/best.pt" --marker-size-mm 50 --camera-index 1
+    source .venv/bin/activate
+    python3 pose.py --weights "/Users/ayp/Library/Mobile Documents/com~apple~CloudDocs/Documents/Documents - Annie’s MacBook Air/Rotten Fruit Detection/best.pt" --marker-size-mm 50 --camera-index 1 --live --capture-width 1440 --capture-height 960
 """
 import argparse
 from dataclasses import dataclass
@@ -179,11 +180,35 @@ def capture_frame_picamera2():
     return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
 
-def capture_frame_webcam(camera_index=1):
+def _apply_capture_resolution(cap, capture_size):
+    """Requests a specific (width, height) from the camera, then warns if the driver
+    didn't actually honor it -- camera_matrix's pixel-coordinate assumptions (cx, cy,
+    fx, fy) are only valid at the resolution calibration.py was run at, so a silent
+    mismatch here would make cv2.undistort warp frames incorrectly."""
+    if capture_size is None:
+        return
+    width, height = capture_size
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    actual = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if actual != (float(width), float(height)):
+        print(
+            f"Warning: requested {width}x{height} capture but the camera is giving "
+            f"{actual[0]:.0f}x{actual[1]:.0f} instead -- your calibration won't match "
+            "this resolution. Recalibrate at this actual resolution, or find a "
+            "resolution the camera will actually honor."
+        )
+
+
+def capture_frame_webcam(camera_index=1, capture_size=None):
     """Works with any regular USB/built-in webcam (e.g. testing on a laptop) via
     OpenCV's standard VideoCapture. Use --picamera on the Pi itself instead, since the
-    Camera Module 3's CSI connection needs picamera2/libcamera, not VideoCapture."""
+    Camera Module 3's CSI connection needs picamera2/libcamera, not VideoCapture.
+    capture_size: optional (width, height) to request -- should match whatever
+    resolution calibration.py was run at, since camera_matrix is resolution-specific.
+    """
     cap = cv2.VideoCapture(camera_index)
+    _apply_capture_resolution(cap, capture_size)
     ok, frame = cap.read()
     cap.release()
     if not ok:
@@ -191,12 +216,14 @@ def capture_frame_webcam(camera_index=1):
     return frame
 
 
-def iter_frames_webcam(camera_index=1):
+def iter_frames_webcam(camera_index=1, capture_size=None):
     """Yields frames continuously from a webcam, keeping the device open across
-    reads (unlike capture_frame_webcam, which is one-shot) -- for a live preview."""
+    reads (unlike capture_frame_webcam, which is one-shot) -- for a live preview.
+    capture_size: see capture_frame_webcam."""
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera index {camera_index}")
+    _apply_capture_resolution(cap, capture_size)
     try:
         while True:
             ok, frame = cap.read()
@@ -254,13 +281,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--live", action="store_true", help="show a live preview window instead of a single capture+print"
     )
+    parser.add_argument(
+        "--capture-width", type=int, help="request this capture width from the webcam (must match calibration.py's resolution)"
+    )
+    parser.add_argument(
+        "--capture-height", type=int, help="request this capture height from the webcam (must match calibration.py's resolution)"
+    )
     args = parser.parse_args()
 
     camera_matrix, dist_coeffs = load_calibration(args.calibration)
     model = YOLO(args.weights)
+    capture_size = (args.capture_width, args.capture_height) if args.capture_width and args.capture_height else None
 
     if args.live:
-        frame_source = iter_frames_picamera2() if args.picamera else iter_frames_webcam(args.camera_index)
+        frame_source = (
+            iter_frames_picamera2()
+            if args.picamera
+            else iter_frames_webcam(args.camera_index, capture_size)
+        )
         run_live(frame_source, model, camera_matrix, dist_coeffs, args.marker_size_mm)
     else:
         if args.image:
@@ -268,7 +306,7 @@ if __name__ == "__main__":
         elif args.picamera:
             frame = capture_frame_picamera2()
         else:
-            frame = capture_frame_webcam(args.camera_index)
+            frame = capture_frame_webcam(args.camera_index, capture_size)
 
         for pose in estimate_poses(frame, model, camera_matrix, dist_coeffs, args.marker_size_mm):
             print(pose)
