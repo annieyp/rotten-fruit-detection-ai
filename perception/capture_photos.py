@@ -9,6 +9,7 @@ Usage:
 Press SPACE to save the current frame, 'q' to quit. Take ~15-20 photos of your
 chessboard at different angles/distances/positions before quitting (see
 calibration.py's docstring for what makes a good set).
+
 """
 import argparse
 from pathlib import Path
