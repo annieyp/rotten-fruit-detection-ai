@@ -26,7 +26,6 @@ def train(
     training_s3_uri should point at a Roboflow "YOLOv8" (Ultralytics) format export
     uploaded as-is -- train/images, train/labels, valid/images, valid/labels, and
     data.yaml at the root. No local conversion step needed.
-
     Contract your image's training entrypoint must satisfy (standard SageMaker BYOC):
       - Runs `docker run <image> train`, i.e. a `train` executable on PATH.
       - Reads hyperparameters from /opt/ml/input/config/hyperparameters.json (values

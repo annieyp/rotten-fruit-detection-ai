@@ -104,6 +104,41 @@ def load_calibration(path):
     return np.array(data["camera_matrix"]), np.array(data["dist_coeffs"])
 
 
+ARUCO_DICT = cv2.aruco.DICT_4X4_50
+
+
+def find_marker_homography(undistorted, marker_size_mm, aruco_dict=ARUCO_DICT):
+    """Detects an ArUco marker and returns (image_corners, homography), where
+    homography maps undistorted image pixels to real-world (X, Y) mm on the marker's
+    plane. Returns (None, None) if no marker was found. Used for a one-time extrinsic
+    calibration when the camera is mounted at a fixed tilt -- see calibrate_extrinsics.py.
+    """
+    gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict)
+    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
+    corners, ids, _ = detector.detectMarkers(gray)
+    if ids is None or len(corners) == 0:
+        return None, None
+
+    # detected corner order is top-left, top-right, bottom-right, bottom-left
+    image_corners = corners[0].reshape(4, 2).astype(np.float32)
+    world_corners = np.array(
+        [[0, 0], [marker_size_mm, 0], [marker_size_mm, marker_size_mm], [0, marker_size_mm]],
+        dtype=np.float32,
+    )
+    homography, _ = cv2.findHomography(image_corners, world_corners)
+    return image_corners, homography
+
+
+def save_extrinsic_calibration(path, homography):
+    Path(path).write_text(json.dumps({"homography": homography.tolist()}))
+
+
+def load_extrinsic_calibration(path):
+    data = json.loads(Path(path).read_text())
+    return np.array(data["homography"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--images-dir", required=True)
