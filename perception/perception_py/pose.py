@@ -25,13 +25,14 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from calibration import load_calibration, load_extrinsic_calibration
-from camera import (
+from perception.perception_py.calibration import load_calibration, load_extrinsic_calibration
+from perception.perception_py.camera import (
     capture_frame_picamera2,
     capture_frame_webcam,
     iter_frames_picamera2,
     iter_frames_webcam,
 )
+from perception.perception_py.tracker import FruitTracker
 
 
 @dataclass
@@ -71,6 +72,15 @@ def _pixels_to_plane(homography, points_px):
     """points_px: (N, 2) pixel coordinates. Returns (N, 2) real-world mm on the plane."""
     points = np.array(points_px, dtype=np.float32).reshape(-1, 1, 2)
     mapped = cv2.perspectiveTransform(points, homography)
+    return mapped.reshape(-1, 2)
+
+
+def _plane_to_pixels(homography, points_mm):
+    """Inverse of _pixels_to_plane -- real-world mm back to undistorted-frame pixel
+    coordinates. Only used for drawing (e.g. placing a track ID label at a track's
+    position), never for measurement."""
+    points = np.array(points_mm, dtype=np.float32).reshape(-1, 1, 2)
+    mapped = cv2.perspectiveTransform(points, np.linalg.inv(homography))
     return mapped.reshape(-1, 2)
 
 
@@ -134,22 +144,30 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, homography, confide
     return (poses, debug_frame) if draw else poses
 
 
-def run_live(frame_source, model, camera_matrix, dist_coeffs, homography, confidence=0.3):
-    """Shows a live window with the camera feed and each fruit's measured rotated
-    box/orientation overlaid, printing every detection on every frame as soon as it's
-    computed -- no batching/averaging across frames. Fruit here is moving (conveyor
-    belt), so there's no window of frames where it holds still long enough to average
-    meaningfully; whatever needs to fuse readings over time (e.g. to predict where a
-    still-moving fruit will be) belongs downstream, where the belt's known velocity
-    lives, not here. Press 'q' in the window to quit."""
+def run_live(frame_source, model, camera_matrix, dist_coeffs, homography, tracker, confidence=0.3):
+    """Shows a live window with the camera feed and each TRACKED fruit's measured
+    rotated box/orientation/ID overlaid. Fruit is moving (conveyor belt), so each
+    frame's raw detections get fed through `tracker` (a FruitTracker) to recover
+    persistent per-fruit identity across frames -- see tracker.py for why that's
+    possible here (known, constant belt velocity) where it wouldn't be for
+    general/unpredictable motion. Press 'q' in the window to quit."""
     print("Live preview running -- press 'q' in the window to quit.")
     for frame in frame_source:
         poses, debug_frame = estimate_poses(
             frame, model, camera_matrix, dist_coeffs, homography, confidence, draw=True
         )
+        tracks = tracker.update(poses)
+
+        for track in tracks:
+            pixel_pos = _plane_to_pixels(homography, [track.position_mm])[0]
+            label = f"#{track.id} {track.class_name} {track.width_mm:.0f}x{track.length_mm:.0f}mm"
+            cv2.putText(
+                debug_frame, label, (int(pixel_pos[0]), int(pixel_pos[1]) + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+            )
+            print(track)
+
         cv2.imshow("pose.py live preview", debug_frame)
-        for pose in poses:
-            print(pose)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
     cv2.destroyAllWindows()
@@ -178,6 +196,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--capture-height", type=int, help="request this capture height from the webcam (must match calibration.py's resolution)"
     )
+    parser.add_argument(
+        "--belt-speed-m-min", type=float, default=25.0, help="conveyor belt speed in meters/minute, for --live tracking"
+    )
+    parser.add_argument(
+        "--belt-direction",
+        type=float,
+        nargs=2,
+        metavar=("DX", "DY"),
+        help="direction fruit travels, as (dx, dy) in the calibrated plane -- measure "
+        "this for your setup (see tracker.py docstring); required for --live",
+    )
     args = parser.parse_args()
 
     camera_matrix, dist_coeffs = load_calibration(args.calibration)
@@ -186,12 +215,18 @@ if __name__ == "__main__":
     capture_size = (args.capture_width, args.capture_height) if args.capture_width and args.capture_height else None
 
     if args.live:
+        if args.belt_direction is None:
+            parser.error("--belt-direction is required for --live (measure it for your setup; see tracker.py)")
         frame_source = (
             iter_frames_picamera2()
             if args.picamera
             else iter_frames_webcam(args.camera_index, capture_size)
         )
-        run_live(frame_source, model, camera_matrix, dist_coeffs, homography)
+        tracker = FruitTracker(
+            belt_speed_mm_s=args.belt_speed_m_min * 1000 / 60,
+            belt_direction=tuple(args.belt_direction),
+        )
+        run_live(frame_source, model, camera_matrix, dist_coeffs, homography, tracker)
     else:
         if args.image:
             frame = cv2.imread(args.image)

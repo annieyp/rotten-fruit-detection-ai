@@ -16,7 +16,7 @@ from pathlib import Path
 
 import cv2
 
-from camera import iter_frames_picamera2, iter_frames_webcam
+from perception.perception_py.camera import iter_frames_picamera2, iter_frames_webcam
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

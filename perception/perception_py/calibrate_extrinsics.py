@@ -17,8 +17,8 @@ import argparse
 
 import cv2
 
-from calibration import find_marker_homography, load_calibration, save_extrinsic_calibration
-from camera import iter_frames_picamera2, iter_frames_webcam
+from perception.perception_py.calibration import find_marker_homography, load_calibration, save_extrinsic_calibration
+from perception.perception_py.camera import iter_frames_picamera2, iter_frames_webcam
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

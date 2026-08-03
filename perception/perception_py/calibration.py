@@ -30,7 +30,7 @@ def calibrate(images_dir, pattern_size=(7, 6), square_size_mm=25.0, show=False):
 
     objp = np.zeros((pattern_size[0] * pattern_size[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0 : pattern_size[0], 0 : pattern_size[1]].T.reshape(-1, 2)
-    objp *= square_size_mm  # real-world units, so calibration output is in mm
+    objp *= square_size_mm  
 
     objpoints, imgpoints = [], []
     # set() to dedupe: on case-insensitive filesystems (e.g. default macOS), "*.jpg"
