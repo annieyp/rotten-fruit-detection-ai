@@ -13,6 +13,23 @@ orientation_deg is relative to whatever axes calibrate_extrinsics.py's marker de
 when it was calibrated (its own printed top edge = 0deg), not the image frame or any
 physical marker still present during operation -- see calibrate_extrinsics.py.
 
+On ROS:
+source ~/ros2_ws_rotten_fruits/venv/bin/activate
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws_rotten_fruits/install/setup.bash
+
+If editing files:
+ cd ~/ros2_ws_rotten_fruits
+python3 -m colcon build --packages-select fruit_pose
+
+At launch time on ROS: 
+ros2 run fruit_pose fruit_pose_node --ros-args \
+    -p weights_path:=/home/ayp/fruit_pose_calibration/best.pt \
+    -p calibration_path:=/home/ayp/fruit_pose_calibration/camera_calibration.json \
+    -p extrinsic_calibration_path:=/home/ayp/fruit_pose_calibration/extrinsic_calibration.json \
+    -p belt_direction:="[1.0, 0.0]"
+
+
 Usage:
     source .venv/bin/activate
     python3 pose.py --weights "/Users/ayp/Library/Mobile Documents/com~apple~CloudDocs/Documents/Documents - Annie’s MacBook Air/Rotten Fruit Detection/best.pt" --extrinsic-calibration extrinsic_calibration.json --camera-index 0 --live
