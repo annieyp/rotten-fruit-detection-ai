@@ -3,8 +3,8 @@ camera/lens; it saves intrinsics to disk for pose.py to load later.
 
 This doesn't need to run on the Raspberry Pi itself -- take ~15-20 photos of a
 chessboard at different angles/distances (on the Pi: `rpicam-still -o img1.jpg`,
-repeated, or `rpicam-still -t 0` for a live preview to line up each shot), copy the
-JPGs to any computer, and run this there. Easier to debug with --show on a machine
+repeated, or `rpicam-still -t 0` for a live preview to line up each shot), **copy the
+JPGs to any computer, and run this there**. Easier to debug with --show on a machine
 with a display than on the Pi itself.
 
 Usage:
@@ -26,29 +26,30 @@ def calibrate(images_dir, pattern_size=(7, 6), square_size_mm=25.0, show=False):
     """pattern_size = (inner corners per row, inner corners per column) -- e.g. a
     standard 8x7-square chessboard has a 7x6 pattern of *inner* corners, not squares.
     """
+
+    #termination criteria
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
+    #prepare object points
     objp = np.zeros((pattern_size[0] * pattern_size[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0 : pattern_size[0], 0 : pattern_size[1]].T.reshape(-1, 2)
     objp *= square_size_mm  
 
+    #Storage for 3d and 2d points from all images
     objpoints, imgpoints = [], []
-    # set() to dedupe: on case-insensitive filesystems (e.g. default macOS), "*.jpg"
-    # and "*.JPG" match the same files, which would otherwise double-count every photo.
-    image_paths = sorted(
-        {
-            p
-            for pattern in ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG", "*.png")
-            for p in glob.glob(str(Path(images_dir) / pattern))
-        }
-    )
+    found = set() #set because macOS is case-insensitive; images will be double-counted
+    for pattern in ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG", "*.png"):
+        for p in glob.glob(str(Path(images_dir) / pattern)):
+            found.add(p)
+    image_paths = sorted(found)
+
     if not image_paths:
         raise ValueError(f"No .jpg/.jpeg/.png images found in {images_dir}")
 
     gray_shape = None
     for path in image_paths:
         img = cv2.imread(path)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) #convert to grayscale for brightness contrast
         gray_shape = gray.shape[::-1]
 
         found, corners = cv2.findChessboardCorners(gray, pattern_size, None)
@@ -56,10 +57,12 @@ def calibrate(images_dir, pattern_size=(7, 6), square_size_mm=25.0, show=False):
             print(f"Skipping {path}: chessboard not found")
             continue
 
+        #subpixel refinement to find corners based on brightness contrast
         corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-        objpoints.append(objp)
+        objpoints.append(objp) #keep appending same numpy array, chessboard size constant
         imgpoints.append(corners)
 
+        #in case you want to check the image calibration accuracy
         if show:
             cv2.drawChessboardCorners(img, pattern_size, corners, found)
             cv2.imshow("corners", img)
@@ -68,27 +71,30 @@ def calibrate(images_dir, pattern_size=(7, 6), square_size_mm=25.0, show=False):
     if show:
         cv2.destroyAllWindows()
 
+    #more patterns = better calibration accuracy
     if len(objpoints) < 10:
         print(
             f"Warning: only {len(objpoints)} usable images -- calibration accuracy "
             "will suffer. Aim for 15-20+ covering different angles/positions."
         )
 
+    #returns the camera matrix, distortion coefficients, rotation and translation vectors
     _, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
         objpoints, imgpoints, gray_shape, None, None
     )
 
     mean_error = 0.0
     for i in range(len(objpoints)):
+        #predict where each corner should be
         projected, _ = cv2.projectPoints(
             objpoints[i], rvecs[i], tvecs[i], camera_matrix, dist_coeffs
         )
-        # cornerSubPix and projectPoints don't always agree on point-array shape
-        # ((N, 2) vs (N, 1, 2)) across OpenCV versions -- normalize both before cv2.norm.
+
+        #flattening fixes shape mismatch
         actual = imgpoints[i].reshape(-1, 2)
         projected = projected.reshape(-1, 2)
-        mean_error += cv2.norm(actual, projected, cv2.NORM_L2) / len(projected)
-    print(f"Mean reprojection error (want well under 1.0): {mean_error / len(objpoints):.4f}")
+        mean_error += cv2.norm(actual, projected, cv2.NORM_L2) / len(projected) #average per-point error
+    print(f"Mean reprojection error (want well under 1.0): {mean_error / len(objpoints):.4f}") #average per-image error
 
     return camera_matrix, dist_coeffs
 
@@ -103,7 +109,7 @@ def load_calibration(path):
     data = json.loads(Path(path).read_text())
     return np.array(data["camera_matrix"]), np.array(data["dist_coeffs"])
 
-
+#constant aruco marker size
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
 
 
@@ -114,14 +120,14 @@ def find_marker_homography(undistorted, marker_size_mm, aruco_dict=ARUCO_DICT):
     calibration when the camera is mounted at a fixed tilt -- see calibrate_extrinsics.py.
     """
     gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
-    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict)
-    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
-    corners, ids, _ = detector.detectMarkers(gray)
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict) #existing marker patterns
+    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters()) 
+    corners, ids, _ = detector.detectMarkers(gray) #where and what type
     if ids is None or len(corners) == 0:
         return None, None
 
-    # detected corner order is top-left, top-right, bottom-right, bottom-left
     image_corners = corners[0].reshape(4, 2).astype(np.float32)
+    #detected corner order is top-left, top-right, bottom-right, bottom-left
     world_corners = np.array(
         [[0, 0], [marker_size_mm, 0], [marker_size_mm, marker_size_mm], [0, marker_size_mm]],
         dtype=np.float32,
@@ -137,7 +143,6 @@ def save_extrinsic_calibration(path, homography):
 def load_extrinsic_calibration(path):
     data = json.loads(Path(path).read_text())
     return np.array(data["homography"])
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

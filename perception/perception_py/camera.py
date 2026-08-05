@@ -13,7 +13,7 @@ def capture_frame_picamera2():
     from picamera2 import Picamera2
 
     picam2 = Picamera2()
-    picam2.configure(picam2.create_still_configuration())
+    picam2.configure(picam2.create_still_configuration()) #sets specific capture mode
     picam2.start()
     frame_rgb = picam2.capture_array()
     picam2.stop()
@@ -22,9 +22,7 @@ def capture_frame_picamera2():
 
 def _apply_capture_resolution(cap, capture_size):
     """Requests a specific (width, height) from the camera, then warns if the driver
-    didn't actually honor it -- camera_matrix's pixel-coordinate assumptions (cx, cy,
-    fx, fy) are only valid at the resolution calibration.py was run at, so a silent
-    mismatch here would make cv2.undistort warp frames incorrectly."""
+    didn't actually honor it. Prevents warping."""
     if capture_size is None:
         return
     width, height = capture_size
@@ -55,7 +53,7 @@ def capture_frame_webcam(camera_index=1, capture_size=None):
         raise RuntimeError(f"Could not read from camera index {camera_index}")
     return frame
 
-
+#for live preview
 def iter_frames_webcam(camera_index=1, capture_size=None):
     """Yields frames continuously from a webcam, keeping the device open across
     reads (unlike capture_frame_webcam, which is one-shot) -- for a live preview.
@@ -67,7 +65,7 @@ def iter_frames_webcam(camera_index=1, capture_size=None):
     try:
         while True:
             ok, frame = cap.read()
-            if not ok:
+            if not ok: #if read is unsuccessful
                 raise RuntimeError(f"Could not read from camera index {camera_index}")
             yield frame
     finally:

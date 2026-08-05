@@ -46,26 +46,21 @@ class FruitPose:
 
 
 def _segment_largest_contour(crop):
-    """Adaptive-polarity Otsu threshold + largest external contour within a detection
-    crop. Plain THRESH_BINARY always marks the *brighter* region as foreground, which
-    silently breaks whenever the fruit is the darker of the two (a dark eggplant on a
-    light tray, say) -- it would pick up the background instead. Since a YOLO box
-    always leaves at least a little background visible near its edges, this samples
-    the crop's outer border pixels and picks whichever threshold direction treats that
-    border as background. Assumes the fruit contrasts reasonably against the
-    background at all -- swap in HSV color thresholding if it doesn't."""
+    """Separate fruit with background in a YOLO detection box and producing a tight shape to measure. Uses adaptive 
+    Otsu threshold to make sure different types of contrast (not just background is lighter) can be processed."""
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0) #remove small-scale noise, messes up thresholding (spotty)
 
+    #Otsu finds best separation threshold separating the image in two
     thresh_value, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     border = np.concatenate([blurred[0, :], blurred[-1, :], blurred[:, 0], blurred[:, -1]])
     if np.mean(border) >= thresh_value:
-        mask = cv2.bitwise_not(mask)  # border was mislabeled as foreground; flip it
+        mask = cv2.bitwise_not(mask)  #if border was mislabeled (brightness above thresh) as foreground flip it
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-    return max(contours, key=cv2.contourArea)
+    return max(contours, key=cv2.contourArea) #keeps only largest shape
 
 
 def _pixels_to_plane(homography, points_px):
@@ -91,7 +86,7 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, homography, confide
     frame annotated with YOLO boxes and each fruit's measured rotated rect -- meant
     for a live preview, not for measurement."""
     undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
-    debug_frame = undistorted.copy() if draw else None
+    debug_frame = undistorted.copy() if draw else None #just a preview for user
 
     result = model.predict(undistorted, verbose=False)[0]
 
@@ -109,8 +104,8 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, homography, confide
             continue
 
         rect = cv2.minAreaRect(contour)
-        box_pts = cv2.boxPoints(rect)  # 4 corners, pixel space, relative to the crop
-        box_pts[:, 0] += xmin  # shift back to full-frame pixels
+        box_pts = cv2.boxPoints(rect)  #4 corners, pixel space, relative to the crop
+        box_pts[:, 0] += xmin  #shift back to full-frame pixels
         box_pts[:, 1] += ymin
 
         world_pts = _pixels_to_plane(homography, box_pts)  # 4 corners, real-world mm
@@ -119,8 +114,8 @@ def estimate_poses(frame, model, camera_matrix, dist_coeffs, homography, confide
         width_mm, length_mm = sorted([side_a, side_b])
 
         center_mm = world_pts.mean(axis=0)
-        # orientation of the longer side, measured in the real-world plane (not raw
-        # pixel space) so perspective distortion from the camera's tilt doesn't skew it
+        #orientation of the longer side, measured in the real-world plane (not raw pixel space) so perspective 
+        #distortion from the camera's tilt doesn't skew it
         long_edge = world_pts[2] - world_pts[1] if side_b >= side_a else world_pts[1] - world_pts[0]
         orientation_deg = float(np.degrees(np.arctan2(long_edge[1], long_edge[0])))
 

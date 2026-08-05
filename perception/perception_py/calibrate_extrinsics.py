@@ -11,7 +11,8 @@ This only works because the camera's tilt/position is FIXED: the homography this
 computes is only valid for exactly the pose the camera was in when you pressed SPACE.
 
 Usage:
-    python3 calibrate_extrinsics.py --calibration camera_calibration.json --marker-size-mm 50 --camera-index 1
+    python3 calibrate_extrinsics.py --calibration camera_calibration.json --marker-size-mm 50 --camera-index 1 
+    replace camera index with --picamera if testing on pi
 """
 import argparse
 
@@ -43,6 +44,7 @@ if __name__ == "__main__":
 
     print("Place the marker on the picking surface. SPACE to capture once it's detected (green outline), 'q' to quit.")
     for frame in frame_source:
+        #undistorting image using calibration coefficients
         undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
         image_corners, homography = find_marker_homography(undistorted, args.marker_size_mm)
 
@@ -53,7 +55,7 @@ if __name__ == "__main__":
             cv2.putText(preview, "No marker found", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         cv2.imshow("calibrate_extrinsics -- SPACE to capture, q to quit", preview)
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(1) & 0xFF #checking for input and refreshing display
         if key == ord(" ") and homography is not None:
             save_extrinsic_calibration(args.output, homography)
             print(f"Saved extrinsic calibration to {args.output}. Remove the marker now -- setup is done.")

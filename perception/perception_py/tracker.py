@@ -5,9 +5,7 @@ camera's view, and predicts where it'll be next based on the belt's known veloci
 
 This works BECAUSE the belt's motion is simple: constant speed, constant direction.
 Predicting where a tracked fruit will be next frame is just "last known position +
-belt_velocity * elapsed_time" -- no need for a general Kalman filter that has to guess
-at unknown/changing motion, which is what real trackers (SORT, DeepSORT) need for
-unpredictable subjects like pedestrians or vehicles.
+belt_velocity * elapsed_time".
 
 belt_direction must be measured for your actual setup: it's a (dx, dy) vector in the
 same plane calibrate_extrinsics.py established (the marker's plane), pointing the
@@ -25,12 +23,12 @@ from dataclasses import dataclass
 class Track:
     id: int
     class_name: str
-    position_mm: tuple  # last actually-observed position, not a live prediction
+    position_mm: tuple #last actually-observed position, not a live prediction
     orientation_deg: float
     width_mm: float
     length_mm: float
     confidence: float
-    last_seen: float  # time.monotonic() of the last matched detection
+    last_seen: float #time.monotonic() of the last matched detection
     frames_since_seen: int = 0
 
 
@@ -39,22 +37,22 @@ class FruitTracker:
         """belt_speed_mm_s: constant belt speed, e.g. 25 m/min -> pass 25_000 / 60.
         belt_direction: (dx, dy), any nonzero vector pointing the direction fruit
         travels (normalized internally). max_missed_frames: how many consecutive
-        frames a track can go unmatched before it's dropped (fruit has left the
+        frames a track can go unmatched (unseen) before it's not tracked anymore (fruit has left the
         belt's visible area)."""
-        norm = math.hypot(*belt_direction)
+        norm = math.hypot(*belt_direction) #euclidean length
         self._velocity_mm_s = (
             belt_direction[0] / norm * belt_speed_mm_s,
             belt_direction[1] / norm * belt_speed_mm_s,
         )
-        self._max_match_distance_mm = max_match_distance_mm
+        self._max_match_distance_mm = max_match_distance_mm #how close for it to be considered same object
         self._max_missed_frames = max_missed_frames
-        self._tracks = {}
-        self._next_id = 0
+        self._tracks = {} #set of fruits currently being tracked
+        self._next_id = 0 #initial id
 
     def _predicted_position(self, track, now):
         elapsed = now - track.last_seen
         vx, vy = self._velocity_mm_s
-        return (track.position_mm[0] + vx * elapsed, track.position_mm[1] + vy * elapsed)
+        return (track.position_mm[0] + vx * elapsed, track.position_mm[1] + vy * elapsed) #constant-velocity equation of motion
 
     def update(self, detections, now=None):
         """detections: this frame's list of FruitPose (from pose.estimate_poses).
@@ -65,19 +63,22 @@ class FruitTracker:
 
         unmatched_detections = list(detections)
 
+        #already detected tracks (greedy nn)
         for track in self._tracks.values():
-            predicted = self._predicted_position(track, now)
+            predicted = self._predicted_position(track, now) #current position
 
             best_detection, best_dist = None, None
             for detection in unmatched_detections:
                 if detection.class_name != track.class_name:
-                    continue
+                    continue #skips anything of wrong class
                 dist = math.hypot(
                     predicted[0] - detection.position_mm[0], predicted[1] - detection.position_mm[1]
-                )
+                ) #striaght-line distance between prediction and actual position
                 if dist <= self._max_match_distance_mm and (best_dist is None or dist < best_dist):
                     best_detection, best_dist = detection, dist
-
+                #greedy neares-neighbor data association, only keeps closest qualifying candidate
+            
+            #updates track data
             if best_detection is not None:
                 track.position_mm = best_detection.position_mm
                 track.orientation_deg = best_detection.orientation_deg
@@ -90,6 +91,7 @@ class FruitTracker:
             else:
                 track.frames_since_seen += 1
 
+        #adds new tracks for unmatched detections
         for detection in unmatched_detections:
             track = Track(
                 id=self._next_id,
@@ -107,13 +109,13 @@ class FruitTracker:
         self._tracks = {
             tid: t for tid, t in self._tracks.items() if t.frames_since_seen <= self._max_missed_frames
         }
+        #retire tracks (+ ids) that were missed for more than max_missed_frames
 
         return list(self._tracks.values())
 
     def predicted_position_now(self, track, now=None):
         """Where a track's fruit currently is, extrapolated forward from its last
-        actual detection using the belt's known velocity -- for a grasp-planning
-        consumer that needs a position estimate between detections, not just at them."""
+        actual detection using the belt's known velocity. For grasp-planning."""
         if now is None:
             now = time.monotonic()
         return self._predicted_position(track, now)

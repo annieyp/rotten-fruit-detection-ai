@@ -41,7 +41,7 @@ if __name__ == "__main__":
     count = 0
     for frame in frame_source:
         cv2.imshow("capture_photos -- SPACE to save, q to quit", frame)
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(1) & 0xFF #refreshes displays and listens for input
         if key == ord(" "):
             path = output_dir / f"photo_{count:02d}.jpg"
             cv2.imwrite(str(path), frame)
