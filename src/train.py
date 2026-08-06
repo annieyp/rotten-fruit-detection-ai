@@ -2,7 +2,7 @@ from sagemaker.estimator import Estimator
 from sagemaker.pytorch import PyTorchModel
 
 
-DEFAULT_YOLO_MODEL = "yolo26m.pt"
+DEFAULT_YOLO_MODEL = "yolo26n.pt"
 
 
 def train(

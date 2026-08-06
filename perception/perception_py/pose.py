@@ -19,7 +19,7 @@ source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws_rotten_fruits/install/setup.bash
 
 If editing files:
- cd ~/ros2_ws_rotten_fruits
+cd ~/ros2_ws_rotten_fruits
 python3 -m colcon build --packages-select fruit_pose
 
 At launch time on ROS: 
